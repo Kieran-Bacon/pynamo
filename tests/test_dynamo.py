@@ -301,3 +301,25 @@ class QueryTests(unittest.TestCase):
         second_request = self.table.query.call_args_list[1].kwargs
         self.assertEqual(second_request["Limit"], 2)
         self.assertEqual(second_request["ExclusiveStartKey"], {"PK": "a"})
+
+
+
+class TemplateFieldTests(unittest.TestCase):
+    """Key template fields must name top-level attributes of the model.
+
+    Nested fields such as `{owner.id}` are deliberately unsupported (DynamoDB does not
+    need them, and supporting them would mean matching values by attribute path
+    throughout), so they are rejected when the index is defined.
+    """
+
+    def test_nested_template_fields_are_rejected(self):
+        for template in ("OWNER#{owner.id}", "TAG#{tags[0]}", "ITEM#{}", "ITEM#{0}"):
+            with self.subTest(template=template):
+                with self.assertRaisesRegex(pydantic.ValidationError, "top-level"):
+                    single_table_indexes(base=(template, "ITEM"))
+
+    def test_format_specs_and_conversions_are_allowed(self):
+        index = LocalSecondaryIndex(
+            index_name="LSI1", sk_name="LSI1SK", sk_template="AT#{timestamp:010d}{id!s}"
+        )
+        self.assertEqual(index.sk_template, "AT#{timestamp:010d}{id!s}")
