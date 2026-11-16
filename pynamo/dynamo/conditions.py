@@ -1,7 +1,7 @@
 """Query comparators, and the key conditions and filters built from them.
 
 Comparators are passed to `DynamoModel.query` in place of plain (equality) values, e.g.
-`Order.query(table, customer_id="c1", date=between("2024-01", "2024-03"))`.
+`Order.query(table, {"customer_id": "c1", "date": between("2024-01", "2024-03")})`.
 
 DynamoDB allows only an equality on the partition key and one condition on the sort key,
 so any value the key conditions don't fully cover is applied as a filter instead.
@@ -11,7 +11,7 @@ so any value the key conditions don't fully cover is applied as a filter instead
 
 import dataclasses
 import functools
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from boto3.dynamodb.conditions import Attr, ConditionBase, Key
@@ -280,15 +280,28 @@ def not_exists() -> NotExists:
     return NotExists()
 
 
-def _format_value(value: Any, conversion: str | None, format_spec: str) -> str:
+def _format_value(value: Any, conversion: str | None, format_spec: str | None) -> str:
     """Format a value as a template field would, so bounds sort like the keys."""
+    # `Formatter.parse` types the spec as optional, though fields always have one
     return _formatter.format_field(
-        _formatter.convert_field(value, conversion), format_spec
+        _formatter.convert_field(value, conversion), format_spec or ""
     )
 
 
+def _prefix_filter(name: str, template: str) -> ConditionBase | None:
+    """Filter a key on its template's leading literal text, or None if there is none.
+
+    Args:
+        name: The key attribute name, e.g. `"PK"`
+        template: The key template, e.g. `"CUSTOMER#{customer_id}"`
+    """
+    # The first parsed part's literal is the text before any field
+    literal = next(iter(_formatter.parse(template)), ("",))[0]
+    return Attr(name).begins_with(literal) if literal else None
+
+
 def _partition_key_condition(
-    name: str, template: str, values: dict[str, Any]
+    name: str, template: str, values: Mapping[str, Any]
 ) -> tuple[ConditionBase, set[str]]:
     """Build the equality condition on a partition key.
 
@@ -325,7 +338,7 @@ def _partition_key_condition(
 
 
 def _sort_key_condition(
-    name: str, template: str, values: dict[str, Any]
+    name: str, template: str, values: Mapping[str, Any]
 ) -> tuple[ConditionBase | None, set[str]]:
     """Build the most selective single condition DynamoDB allows on a sort key.
 

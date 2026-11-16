@@ -133,16 +133,15 @@ class DynamoModelTests(unittest.TestCase):
         table = Mock()
         table.query.return_value = {"Items": []}
 
-        pages = list(
+        page = next(
             AuditLog.query(
                 table,
+                {"user_id": "user-1", "timestamp": between("2020", "2022")},
                 index_name="GSI1",
-                user_id="user-1",
-                timestamp=between("2020", "2022"),
             )
         )
 
-        self.assertEqual(len(pages), 1)
+        self.assertEqual(page.items, [])
         query_args = table.query.call_args.kwargs
         self.assertEqual(query_args["IndexName"], "GSI1")
         key_expression = query_args["KeyConditionExpression"].get_expression()
@@ -168,7 +167,9 @@ def _render(condition, is_key_condition=False):
     for placeholder, name in built.attribute_name_placeholders.items():
         expression = expression.replace(placeholder, name)
     # Replace longest placeholders first so :v10 is not clobbered by :v1
-    for placeholder in sorted(built.attribute_value_placeholders, key=len, reverse=True):
+    for placeholder in sorted(
+        built.attribute_value_placeholders, key=len, reverse=True
+    ):
         value = built.attribute_value_placeholders[placeholder]
         rendered = f"'{value}'" if isinstance(value, str) else str(value)
         expression = expression.replace(placeholder, rendered)
@@ -189,36 +190,44 @@ class Order(DynamoModel):
     total: int
 
 
+def _order_item(**overrides):
+    """Get a stored Order item, with any attributes overridden."""
+    order = Order(
+        customer_id="c1", order_id="o1", date="2024-01-01", status="open", total=1
+    )
+    return order.model_dump() | overrides
+
+
 class QueryTests(unittest.TestCase):
     def setUp(self):
         self.table = Mock()
         self.table.query.return_value = {"Items": []}
 
     def query(self, *args, **kwargs):
-        list(Order.query(self.table, *args, **kwargs))
+        next(Order.query(self.table, *args, **kwargs))
         request = self.table.query.call_args.kwargs
         key = _render(request["KeyConditionExpression"], is_key_condition=True)
         filter_expression = request.get("FilterExpression")
         return request, key, filter_expression and _render(filter_expression)
 
     def test_full_sort_key_is_an_equality(self):
-        _, key, filters = self.query(customer_id="c1", date="2024", order_id="o1")
+        _, key, filters = self.query(
+            {"customer_id": "c1", "date": "2024", "order_id": "o1"}
+        )
         self.assertEqual(key, "(PK = 'CUSTOMER#c1' AND SK = 'ORDER#2024#o1')")
         self.assertIsNone(filters)
 
     def test_missing_sort_key_attributes_match_on_the_fixed_prefix(self):
-        _, key, filters = self.query(customer_id="c1")
+        _, key, filters = self.query({"customer_id": "c1"})
         self.assertEqual(key, "(PK = 'CUSTOMER#c1' AND begins_with(SK, 'ORDER#'))")
         self.assertIsNone(filters)
 
-        _, key, _ = self.query(customer_id="c1", date="2024")
-        self.assertEqual(
-            key, "(PK = 'CUSTOMER#c1' AND begins_with(SK, 'ORDER#2024#'))"
-        )
+        _, key, _ = self.query({"customer_id": "c1", "date": "2024"})
+        self.assertEqual(key, "(PK = 'CUSTOMER#c1' AND begins_with(SK, 'ORDER#2024#'))")
 
     def test_comparator_on_a_middle_attribute_is_also_filtered(self):
         _, key, filters = self.query(
-            customer_id="c1", date=between("2024-01", "2024-03")
+            {"customer_id": "c1", "date": between("2024-01", "2024-03")}
         )
         self.assertEqual(
             key,
@@ -229,9 +238,7 @@ class QueryTests(unittest.TestCase):
 
     def test_second_sort_key_condition_goes_to_the_filter(self):
         _, key, filters = self.query(
-            customer_id="c1",
-            date=gte("2024"),
-            order_id=begins_with("o"),
+            {"customer_id": "c1", "date": gte("2024"), "order_id": begins_with("o")}
         )
         self.assertEqual(
             key,
@@ -240,16 +247,18 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(filters, "begins_with(order_id, 'o')")
 
     def test_attribute_after_a_missing_one_goes_to_the_filter(self):
-        _, key, filters = self.query(customer_id="c1", order_id="o1")
+        _, key, filters = self.query({"customer_id": "c1", "order_id": "o1"})
         self.assertEqual(key, "(PK = 'CUSTOMER#c1' AND begins_with(SK, 'ORDER#'))")
         self.assertEqual(filters, "order_id = 'o1'")
 
     def test_non_key_attributes_are_filtered(self):
-        _, _, filters = self.query(customer_id="c1", status="open", total=gt(10))
+        _, _, filters = self.query(
+            {"customer_id": "c1", "status": "open", "total": gt(10)}
+        )
         self.assertEqual(filters, "(status = 'open' AND total > 10)")
 
     def test_exclusive_bound_with_a_prefix_is_refined_by_the_filter(self):
-        _, key, filters = self.query(customer_id="c1", date=lt("2024"))
+        _, key, filters = self.query({"customer_id": "c1", "date": lt("2024")})
         self.assertEqual(
             key, "(PK = 'CUSTOMER#c1' AND SK BETWEEN 'ORDER#' AND 'ORDER#2024')"
         )
@@ -257,7 +266,8 @@ class QueryTests(unittest.TestCase):
 
     def test_local_index_uses_the_table_partition_key(self):
         request, key, filters = self.query(
-            "LSI1", customer_id="c1", status="open", date=between("2024", "2025")
+            {"customer_id": "c1", "status": "open", "date": between("2024", "2025")},
+            "LSI1",
         )
         self.assertEqual(request["IndexName"], "LSI1")
         self.assertEqual(
@@ -268,40 +278,159 @@ class QueryTests(unittest.TestCase):
         self.assertIsNone(filters)
 
     def test_filter_only_comparator_on_the_sort_key(self):
-        _, key, filters = self.query(customer_id="c1", date=ne("2024"))
+        _, key, filters = self.query({"customer_id": "c1", "date": ne("2024")})
         self.assertEqual(key, "(PK = 'CUSTOMER#c1' AND begins_with(SK, 'ORDER#'))")
         self.assertEqual(filters, "date <> '2024'")
 
     def test_partition_key_values_are_required(self):
         with self.assertRaisesRegex(ValueError, "order_id are required"):
-            Order.query(self.table, "GSI1", customer_id="c1")
+            next(Order.query(self.table, {"customer_id": "c1"}, "GSI1"))
         with self.assertRaisesRegex(ValueError, "must be given as plain values"):
-            Order.query(self.table, customer_id=begins_with("c"))
+            next(Order.query(self.table, {"customer_id": begins_with("c")}))
 
     def test_unknown_attributes_and_indexes_are_rejected(self):
         with self.assertRaisesRegex(TypeError, "colour"):
-            Order.query(self.table, customer_id="c1", colour="red")
+            next(Order.query(self.table, {"customer_id": "c1", "colour": "red"}))
         with self.assertRaisesRegex(ValueError, "no index named 'GSI9'"):
-            Order.query(self.table, "GSI9", customer_id="c1")
+            next(Order.query(self.table, {"customer_id": "c1"}, "GSI9"))
 
-    def test_pages_until_the_limit_is_reached(self):
-        item = Order(
-            customer_id="c1", order_id="o1", date="2024-01-01", status="open", total=1
-        ).model_dump()
+    def test_attributes_can_share_names_with_query_parameters(self):
+        class Setting(DynamoModel):
+            indexes = single_table_indexes(base=("TABLE#{table}", "LIMIT#{limit}"))
+
+            table: str
+            limit: int
+            index_name: str
+
+        next(
+            Setting.query(
+                self.table,
+                {"table": "t1", "limit": gte(5), "index_name": "i1"},
+                limit=10,
+            )
+        )
+        request = self.table.query.call_args.kwargs
+
+        self.assertEqual(request["Limit"], 10)
+        self.assertNotIn("IndexName", request)
+        self.assertEqual(
+            _render(request["KeyConditionExpression"], is_key_condition=True),
+            "(PK = 'TABLE#t1' AND SK BETWEEN 'LIMIT#5' AND 'LIMIT#\U0010ffff')",
+        )
+        self.assertEqual(_render(request["FilterExpression"]), "index_name = 'i1'")
+
+    def test_yields_a_page_per_request_until_there_is_no_token(self):
         self.table.query.side_effect = [
-            {"Items": [item], "LastEvaluatedKey": {"PK": "a"}},
-            {"Items": [item, item], "LastEvaluatedKey": {"PK": "b"}},
+            {"Items": [_order_item()], "LastEvaluatedKey": {"PK": "a"}},
+            {"Items": [_order_item(), _order_item()]},
         ]
 
-        pages = list(Order.query(self.table, customer_id="c1", limit=3))
+        pages = list(Order.query(self.table, {"customer_id": "c1"}, limit=3))
 
-        self.assertEqual([len(page.items) for page in pages], [1, 2])
-        self.assertEqual(pages[-1].token, {"PK": "b"})
-        self.assertIs(pages[0].items[0]._table, self.table)
-        second_request = self.table.query.call_args_list[1].kwargs
-        self.assertEqual(second_request["Limit"], 2)
+        # Each request passes the limit straight to DynamoDB and resumes from the last
+        first_request, second_request = (
+            call.kwargs for call in self.table.query.call_args_list
+        )
+        self.assertEqual(first_request["Limit"], 3)
+        self.assertNotIn("ExclusiveStartKey", first_request)
+        self.assertEqual(second_request["Limit"], 3)
         self.assertEqual(second_request["ExclusiveStartKey"], {"PK": "a"})
 
+        # Items are attached models, and the last page has no token
+        self.assertEqual([len(page.items) for page in pages], [1, 2])
+        self.assertIs(pages[0].items[0]._table, self.table)
+        self.assertEqual([page.token for page in pages], [{"PK": "a"}, None])
+
+    def test_invalid_items_are_collected_on_the_page(self):
+        invalid = _order_item(total="lots")
+        self.table.query.return_value = {"Items": [_order_item(), invalid]}
+
+        page = next(Order.query(self.table, {"customer_id": "c1"}))
+
+        # The valid item is still returned alongside the failure
+        self.assertEqual(len(page.items), 1)
+        self.assertEqual(len(page.errors), 1)
+        self.assertEqual(page.errors[0].item, invalid)
+        self.assertEqual(page.errors[0].error.errors()[0]["loc"], ("total",))
+
+
+class ScanTests(unittest.TestCase):
+    def setUp(self):
+        self.table = Mock()
+        self.table.scan.return_value = {"Items": []}
+
+    def scan(self, *args, **kwargs):
+        next(Order.scan(self.table, *args, **kwargs))
+        return self.table.scan.call_args.kwargs
+
+    def test_without_values_items_are_matched_by_primary_key_prefixes(self):
+        request = self.scan()
+        self.assertEqual(
+            _render(request["FilterExpression"]),
+            "(begins_with(PK, 'CUSTOMER#') AND begins_with(SK, 'ORDER#'))",
+        )
+
+    def test_keys_without_a_leading_literal_are_not_filtered(self):
+        class Event(DynamoModel):
+            indexes = single_table_indexes(base=("{source}", "EVENT#{at}"))
+
+            source: str
+            at: str
+
+        next(Event.scan(self.table))
+        request = self.table.scan.call_args.kwargs
+        self.assertEqual(
+            _render(request["FilterExpression"]), "begins_with(SK, 'EVENT#')"
+        )
+
+    def test_every_value_is_a_filter(self):
+        request = self.scan({"customer_id": "c1", "date": between("2024", "2025")})
+        self.assertNotIn("KeyConditionExpression", request)
+        self.assertEqual(
+            _render(request["FilterExpression"]),
+            "((begins_with(PK, 'CUSTOMER#') AND begins_with(SK, 'ORDER#')) AND "
+            "(customer_id = 'c1' AND date BETWEEN '2024' AND '2025'))",
+        )
+
+    def test_request_options_are_passed_to_dynamodb(self):
+        request = self.scan(
+            {"status": "open"},
+            "GSI1",
+            limit=5,
+            consistent_read=True,
+            start_token={"PK": "a"},
+        )
+        self.assertEqual(request["IndexName"], "GSI1")
+        self.assertEqual(request["Limit"], 5)
+        self.assertTrue(request["ConsistentRead"])
+        self.assertEqual(request["ExclusiveStartKey"], {"PK": "a"})
+
+    def test_unknown_attributes_and_indexes_are_rejected(self):
+        with self.assertRaisesRegex(TypeError, "colour"):
+            next(Order.scan(self.table, {"colour": "red"}))
+        with self.assertRaisesRegex(ValueError, "no index named 'GSI9'"):
+            next(Order.scan(self.table, index_name="GSI9"))
+        with self.assertRaisesRegex(ValueError, "limit must be a positive integer"):
+            next(Order.scan(self.table, limit=0))
+
+    def test_yields_pages_and_collects_invalid_items(self):
+        invalid = _order_item(total="lots")
+        self.table.scan.side_effect = [
+            {"Items": [_order_item()], "LastEvaluatedKey": {"PK": "a"}},
+            {"Items": [_order_item(), invalid]},
+        ]
+
+        pages = list(Order.scan(self.table))
+
+        # The second request resumes from the first page's token
+        second_request = self.table.scan.call_args_list[1].kwargs
+        self.assertEqual(second_request["ExclusiveStartKey"], {"PK": "a"})
+
+        # Valid items are attached models; invalid ones are on the page's errors
+        self.assertEqual([len(page.items) for page in pages], [1, 1])
+        self.assertIs(pages[0].items[0]._table, self.table)
+        self.assertEqual([page.errors[0].item for page in pages[1:]], [invalid])
+        self.assertEqual([page.token for page in pages], [{"PK": "a"}, None])
 
 
 class TemplateFieldTests(unittest.TestCase):
@@ -314,9 +443,11 @@ class TemplateFieldTests(unittest.TestCase):
 
     def test_nested_template_fields_are_rejected(self):
         for template in ("OWNER#{owner.id}", "TAG#{tags[0]}", "ITEM#{}", "ITEM#{0}"):
-            with self.subTest(template=template):
-                with self.assertRaisesRegex(pydantic.ValidationError, "top-level"):
-                    single_table_indexes(base=(template, "ITEM"))
+            with (
+                self.subTest(template=template),
+                self.assertRaisesRegex(pydantic.ValidationError, "top-level"),
+            ):
+                single_table_indexes(base=(template, "ITEM"))
 
     def test_format_specs_and_conversions_are_allowed(self):
         index = LocalSecondaryIndex(

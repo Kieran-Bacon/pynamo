@@ -4,7 +4,7 @@
 `DynamoModel` class. The public API is re-exported here.
 """
 
-from .base import DynamoModel, Page
+from .base import DynamoModel, InvalidItem, Page
 from .conditions import (
     BeginsWith,
     Between,
@@ -50,6 +50,7 @@ __all__ = [
     "GreaterThanOrEqual",
     "In",
     "Index",
+    "InvalidItem",
     "LessThan",
     "LessThanOrEqual",
     "LocalSecondaryIndex",
