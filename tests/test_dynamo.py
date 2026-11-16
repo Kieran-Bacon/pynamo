@@ -354,6 +354,199 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(page.errors[0].error.errors()[0]["loc"], ("total",))
 
 
+class PutTests(unittest.TestCase):
+    def setUp(self):
+        self.table = Mock()
+        self.order = Order.model_validate(_order_item())
+
+    def test_writes_the_attributes_and_every_index_key(self):
+        self.order.put(self.table)
+
+        self.assertEqual(
+            self.table.put_item.call_args.kwargs["Item"],
+            _order_item()
+            | {
+                "PK": "CUSTOMER#c1",
+                "SK": "ORDER#2024-01-01#o1",
+                "LSI1SK": "ORDER_BY_STATUS#open#2024-01-01",
+                "GSI1PK": "ORDER#o1",
+                "GSI1SK": "ORDER",
+            },
+        )
+
+    def test_putting_to_the_attached_table_checkpoints(self):
+        self.order.attach(self.table).put()
+        self.assertEqual(
+            self.order._checkpoint, self.table.put_item.call_args.kwargs["Item"]
+        )
+
+    def test_putting_to_another_table_is_a_one_off(self):
+        # An unattached model stays unattached and unchecked
+        self.order.put(self.table)
+        self.assertIsNone(self.order._table)
+        self.assertIsNone(self.order._checkpoint)
+
+        # An attached model keeps its table and checkpoint
+        self.order.attach(self.table).put()
+        checkpoint = self.order._checkpoint
+        other = Mock()
+        self.order.status = "shipped"
+        self.order.put(other)
+        other.put_item.assert_called_once()
+        self.assertIs(self.order._table, self.table)
+        self.assertEqual(self.order._checkpoint, checkpoint)
+
+        # So the attached table is still updated with the change
+        self.order.put()
+        self.table.update_item.assert_called_once()
+
+    def test_defaults_to_the_attached_table(self):
+        self.order.attach(self.table).put()
+        self.table.put_item.assert_called_once()
+
+        with self.assertRaisesRegex(ValueError, "not attached to a table"):
+            Order.model_validate(_order_item()).put()
+
+    def test_key_templates_can_use_properties(self):
+        class Event(DynamoModel):
+            indexes = single_table_indexes(base=("SOURCE#{source}", "EVENT#{day}"))
+
+            source: str
+            at: str
+
+            @property
+            def day(self) -> str:
+                return self.at[:10]
+
+        Event(source="s1", at="2024-01-01T09:00").put(self.table)
+        item = self.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual((item["PK"], item["SK"]), ("SOURCE#s1", "EVENT#2024-01-01"))
+
+    def test_get_reads_back_what_put_wrote(self):
+        self.order.attach(self.table).put()
+        self.table.get_item.return_value = {
+            "Item": self.table.put_item.call_args.kwargs["Item"]
+        }
+
+        read = Order.get(self.table, customer_id="c1", date="2024-01-01", order_id="o1")
+        self.assertEqual(read, self.order)
+
+    def test_a_checkpointed_model_only_updates_what_changed(self):
+        self.order.attach(self.table).put()
+        self.order.status = "shipped"
+        self.order.total = 2
+        self.order.put()
+
+        # Only the changed attributes, and the index key built from status, are set
+        self.table.put_item.assert_called_once()
+        arguments = self.table.update_item.call_args.kwargs
+        self.assertEqual(
+            arguments["Key"], {"PK": "CUSTOMER#c1", "SK": "ORDER#2024-01-01#o1"}
+        )
+        self.assertEqual(
+            arguments["UpdateExpression"], "SET #u0 = :u0, #u1 = :u1, #u2 = :u2"
+        )
+        self.assertEqual(
+            arguments["ExpressionAttributeNames"],
+            {"#u0": "status", "#u1": "total", "#u2": "LSI1SK"},
+        )
+        self.assertEqual(
+            arguments["ExpressionAttributeValues"],
+            {":u0": "shipped", ":u1": 2, ":u2": "ORDER_BY_STATUS#shipped#2024-01-01"},
+        )
+        self.assertEqual(
+            _render(arguments["ConditionExpression"]), "attribute_exists(PK)"
+        )
+
+        # The new state is checkpointed, so putting again sends nothing
+        self.order.put()
+        self.table.update_item.assert_called_once()
+
+    def test_a_detached_model_is_put_whole(self):
+        self.order.attach(self.table).put()
+        self.order.attach(None)
+        self.order.put(self.table)
+        self.assertEqual(self.table.put_item.call_count, 2)
+        self.table.update_item.assert_not_called()
+
+    def test_changing_the_primary_key_is_rejected(self):
+        self.order.attach(self.table).put()
+        self.order.order_id = "o2"
+        with self.assertRaisesRegex(ValueError, "primary key has changed"):
+            self.order.put()
+
+
+class DeleteTests(unittest.TestCase):
+    def setUp(self):
+        self.table = Mock()
+        self.table.get_item.return_value = {"Item": _order_item()}
+
+    def get(self):
+        """Read the order, so it is attached and checkpointed."""
+        return Order.get(self.table, customer_id="c1", date="2024-01-01", order_id="o1")
+
+    def test_deletes_by_the_primary_key(self):
+        Order.model_validate(_order_item()).delete(self.table)
+        self.table.delete_item.assert_called_once_with(
+            Key={"PK": "CUSTOMER#c1", "SK": "ORDER#2024-01-01#o1"}
+        )
+
+    def test_uses_the_checkpointed_key_when_the_key_has_changed(self):
+        order = self.get()
+        order.order_id = "o2"
+        order.delete()
+        self.table.delete_item.assert_called_once_with(
+            Key={"PK": "CUSTOMER#c1", "SK": "ORDER#2024-01-01#o1"}
+        )
+
+    def test_drops_the_checkpoint_but_stays_attached(self):
+        order = self.get().delete()
+        self.assertIsNone(order._checkpoint)
+        self.assertIs(order._table, self.table)
+
+    def test_deleting_from_another_table_keeps_the_checkpoint(self):
+        order = self.get()
+        checkpoint = order._checkpoint
+        other = Mock()
+        order.delete(other)
+        other.delete_item.assert_called_once()
+        self.assertEqual(order._checkpoint, checkpoint)
+
+    def test_requires_a_table(self):
+        with self.assertRaisesRegex(ValueError, "not attached to a table"):
+            Order.model_validate(_order_item()).delete()
+
+
+class RemoveTests(unittest.TestCase):
+    def test_deletes_by_the_key_built_from_the_values(self):
+        table = Mock()
+        Order.remove(table, customer_id="c1", date="2024-01-01", order_id="o1")
+        table.delete_item.assert_called_once_with(
+            Key={"PK": "CUSTOMER#c1", "SK": "ORDER#2024-01-01#o1"}
+        )
+
+    def test_get_and_remove_accept_a_key_attribute_named_table(self):
+        class Setting(DynamoModel):
+            indexes = single_table_indexes(base=("TABLE#{table}", "SETTING"))
+
+            table: str
+
+        table = Mock()
+        table.get_item.return_value = {"Item": {"table": "t1"}}
+        key = {"PK": "TABLE#t1", "SK": "SETTING"}
+
+        self.assertEqual(Setting.get(table, table="t1").table, "t1")
+        table.get_item.assert_called_once_with(Key=key)
+        Setting.remove(table, table="t1")
+        table.delete_item.assert_called_once_with(Key=key)
+
+    def test_key_attributes_are_required(self):
+        table = Mock()
+        with self.assertRaises(KeyError):
+            Order.remove(table, customer_id="c1", date="2024-01-01")
+        table.delete_item.assert_not_called()
+
+
 class ScanTests(unittest.TestCase):
     def setUp(self):
         self.table = Mock()

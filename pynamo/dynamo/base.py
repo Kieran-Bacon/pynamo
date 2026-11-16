@@ -28,6 +28,7 @@ from .indexes import (
     Index,
     LocalSecondaryIndex,
     PrimaryIndex,
+    _formatter,
     _template_fields,
 )
 
@@ -81,21 +82,23 @@ class DynamoModel(pydantic.BaseModel):
         _primary_index: The `PrimaryIndex` from `indexes`
         _indexes: Each index by name, with the primary index under None
         _query_attributes: The attributes `query` and `scan` accept values for
+        _key_templates: Each key attribute name and its template, for `put`
         _table: The table the model is attached to, if any
-        _checkpoint: The model's state when last checkpointed, for change tracking
+        _checkpoint: The stored item when last checkpointed, which `put` diffs against
     """
 
     indexes: ClassVar[list[Index]]
     _primary_index: ClassVar[PrimaryIndex]
     _indexes: ClassVar[dict[str | None, Index]]
     _query_attributes: ClassVar[frozenset[str]]
+    _key_templates: ClassVar[tuple[tuple[str, str], ...]]
 
     _table: Table | None = None
     _checkpoint: dict | None = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs):
-        """Validate a subclass's `indexes` and cache what `query` needs from them.
+        """Validate a subclass's `indexes` and cache what `query` and `put` need.
 
         Raises:
             TypeError: If `indexes` is not a list or holds an unsupported index type
@@ -154,6 +157,7 @@ class DynamoModel(pydantic.BaseModel):
         cls._query_attributes = frozenset(
             key_attributes | set(cls.model_fields) | set(cls.model_computed_fields)
         )
+        cls._key_templates = tuple(templates)
 
     @classmethod
     def _attribute_name(cls, name: str) -> str:
@@ -263,24 +267,113 @@ class DynamoModel(pydantic.BaseModel):
 
             request["ExclusiveStartKey"] = token
 
+    def _keys(self) -> dict[str, str]:
+        """Generate every index's key attributes from this model's attributes."""
+        keys = {}
+        for key_name, template in self._key_templates:
+            # Template fields may be properties, so read each from the model
+            values = {name: getattr(self, name) for name in _template_fields(template)}
+            keys[key_name] = _formatter.vformat(template, (), values)
+        return keys
+
+    def _item(self) -> dict[str, Any]:
+        """Get the item as stored: the model's attributes plus every index's keys."""
+        return self.model_dump(by_alias=True) | self._keys()
+
+    def _update_arguments(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        """Build `update_item` arguments for how `item` differs from the checkpoint.
+
+        Returns:
+            The arguments, or None if nothing has changed
+
+        Raises:
+            ValueError: If the primary key has changed, as DynamoDB can't update it
+        """
+        checkpoint = self._checkpoint or {}
+        primary = self._primary_index
+        key = {name: checkpoint[name] for name in (primary.pk_name, primary.sk_name)}
+        if any(item[name] != value for name, value in key.items()):
+            raise ValueError(
+                f"{type(self).__name__}'s primary key has changed from {key}; detach "
+                "it to put it as a new item"
+            )
+
+        # Set changed and new attributes (the sentinel marks absent ones), and remove
+        # attributes no longer present
+        changed = [
+            name for name, value in item.items() if checkpoint.get(name, ...) != value
+        ]
+        removed = [name for name in checkpoint if name not in item]
+        if not changed and not removed:
+            return None
+
+        # Use placeholders, as names may be reserved words; boto3 uses #n/:v for the
+        # condition, so these use #u/:u
+        names = {f"#u{i}": name for i, name in enumerate(changed + removed)}
+        values = {f":u{i}": item[name] for i, name in enumerate(changed)}
+        clauses = []
+        if changed:
+            clauses.append(
+                "SET " + ", ".join(f"#u{i} = :u{i}" for i in range(len(changed)))
+            )
+        if removed:
+            offset = len(changed)
+            clauses.append(
+                "REMOVE " + ", ".join(f"#u{offset + i}" for i in range(len(removed)))
+            )
+
+        arguments: dict[str, Any] = {
+            "Key": key,
+            "UpdateExpression": " ".join(clauses),
+            # Fail rather than create a partial item if it has since been deleted
+            "ConditionExpression": Attr(primary.pk_name).exists(),
+            "ExpressionAttributeNames": names,
+        }
+        if values:
+            arguments["ExpressionAttributeValues"] = values
+        return arguments
+
+    def _target_table(self, table: Table | None) -> Table:
+        """Get the given table, or the attached one if None.
+
+        Raises:
+            ValueError: If no table is given and the model isn't attached to one
+        """
+        if table is None:
+            table = self._table
+        if table is None:
+            raise ValueError(
+                f"{type(self).__name__} is not attached to a table, so one must be given"
+            )
+        return table
+
     @classmethod
-    def get(cls, table: Table, **kwargs) -> Self:
-        """Get an item by its primary key, attached to `table` and checkpointed.
+    def _primary_key(cls, values: Mapping[str, Any]) -> dict[str, str]:
+        """Generate the primary key from attribute values, for `get` and `remove`.
+
+        Raises:
+            KeyError: If a primary key template attribute has no value
+        """
+        primary = cls._primary_index
+        return {
+            primary.pk_name: primary.pk_template.format_map(values),
+            primary.sk_name: primary.sk_template.format_map(values),
+        }
+
+    @classmethod
+    def get(cls, table: Table, /, **kwargs) -> Self:
+        """Get an item by its primary key, attached to `table` and check pointed.
 
         Args:
-            table: The table to read from
+            table: The table to read from; positional-only, so a key attribute can
+                also be named `table`
             **kwargs: Values for the attributes in the primary key templates
 
         Raises:
             ValueError: If DynamoDB rejects the request
             KeyError: If no item has the key, or a key attribute has no value
         """
-        # Generate the primary key from the given values
-        primary = cls._primary_index
-        key = {
-            primary.pk_name: primary.pk_template.format(**kwargs),
-            primary.sk_name: primary.sk_template.format(**kwargs),
-        }
+        key = cls._primary_key(kwargs)
 
         try:
             response = table.get_item(Key=key)
@@ -298,6 +391,113 @@ class DynamoModel(pydantic.BaseModel):
             # The response has no "Item" when the key doesn't exist
             raise KeyError(
                 f"Could not find entry for key {key} in dynamo table {table}"
+            ) from exc
+
+    def put(self, table: Table | None = None) -> Self:
+        """Write this model and its index keys to a table.
+
+        If the model has a checkpoint for the table (e.g. from `get`, `query` or a
+        previous `put`), only the attributes changed since are updated, and nothing is
+        sent if none have. Otherwise the whole item is put, replacing any existing
+        item. Writing to the attached table then checkpoints the model; writing to
+        another table is a one-off put that leaves the attachment and checkpoint as
+        they are.
+
+        Args:
+            table: The table to write to; defaults to the table the model is attached to
+
+        Returns:
+            This model, for chaining
+
+        Raises:
+            ValueError: If there is no table to write to, the check pointed primary key
+                has changed, or DynamoDB rejects the request (including updating an
+                item that no longer exists)
+        """
+        table = self._target_table(table)
+
+        item = self._item()
+        attached = table is self._table
+
+        try:
+            if attached and self._checkpoint is not None:
+                # Update only what changed since the checkpoint
+                arguments = self._update_arguments(item)
+                if arguments is not None:
+                    table.update_item(**arguments)
+            else:
+                table.put_item(Item=item)
+        except botocore.exceptions.ClientError as exc:
+            raise ValueError(
+                f"Validation error on table={table} - {exc.response['Error']['Code']} {exc.response['Error']['Message']}"
+            ) from exc
+
+        # The attached table now holds this state, so it's the new baseline for changes
+        if attached:
+            self._checkpoint = item
+        return self
+
+    def delete(self, table: Table | None = None) -> Self:
+        """Delete this model's item from a table.
+
+        The item is found by the check pointed primary key if the model has a checkpoint
+        for the table, so it is deleted even if the key attributes have since changed;
+        otherwise by the key generated from the model. Deleting from the attached table
+        drops the checkpoint, so a later `put` writes the whole item; deleting from
+        another table leaves it as it is.
+
+        Args:
+            table: The table to delete from; defaults to the table the model is attached to
+
+        Returns:
+            This model, for chaining
+
+        Raises:
+            ValueError: If there is no table to delete from, or DynamoDB rejects the request
+        """
+        table = self._target_table(table)
+        attached = table is self._table
+
+        # Prefer the key the item was stored under to the key it would have now
+        if attached and self._checkpoint is not None:
+            stored = self._checkpoint
+        else:
+            stored = self._keys()
+        primary = self._primary_index
+        key = {name: stored[name] for name in (primary.pk_name, primary.sk_name)}
+
+        try:
+            table.delete_item(Key=key)
+        except botocore.exceptions.ClientError as exc:
+            raise ValueError(
+                f"Validation error on table={table} key={key} - {exc.response['Error']['Code']} {exc.response['Error']['Message']}"
+            ) from exc
+
+        # The attached table's item is gone, so there's nothing left to diff against
+        if attached:
+            self._checkpoint = None
+        return self
+
+    @classmethod
+    def remove(cls, table: Table, /, **kwargs) -> None:
+        """Delete an item by its primary key, without needing its model.
+
+        Args:
+            table: The table to delete from; positional-only, so a key attribute can
+                also be named `table`
+            **kwargs: Values for the attributes in the primary key templates
+
+        Raises:
+            ValueError: If DynamoDB rejects the request
+            KeyError: If a key attribute has no value
+        """
+        key = cls._primary_key(kwargs)
+
+        try:
+            table.delete_item(Key=key)
+        except botocore.exceptions.ClientError as exc:
+            raise ValueError(
+                f"Validation error on table={table} key={key} - {exc.response['Error']['Code']} {exc.response['Error']['Message']}"
             ) from exc
 
     @classmethod
@@ -426,19 +626,22 @@ class DynamoModel(pydantic.BaseModel):
         yield from cls._pages(table, table.scan, request)
 
     def attach(self, table: Table | None) -> Self:
-        """Attach this model to a table, or detach it (dropping its checkpoint) with None.
+        """Attach this model to a table, or detach it with None.
+
+        Changing the table drops the checkpoint, as it only describes the item in the
+        table it came from.
 
         Returns:
             This model, for chaining
         """
-        self._table = table
-        if table is None:
+        if table is not self._table:
             self._checkpoint = None
+        self._table = table
         return self
 
     def checkpoint(self):
-        """Record the model's current state, against which `update()` finds changes."""
-        self._checkpoint = self.model_dump()
+        """Record the model's current stored item, against which `put` finds changes."""
+        self._checkpoint = self._item()
 
     model_config = pydantic.ConfigDict(
         arbitrary_types_allowed=True,

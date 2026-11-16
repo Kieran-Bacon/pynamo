@@ -43,6 +43,54 @@ These rules are checked when the class is defined:
 primary key from the values and returns the item. The model is attached to the table
 and checkpointed.
 
+### `put`
+
+`order.put(table)` writes the model, the inverse of `get`. The stored item is the
+model's `model_dump(by_alias=True)` plus every index's key attributes, generated from
+the templates. The table defaults to the one the model is attached to.
+
+Models are attached and checkpointed when they're read with `get`, `query` or `scan`.
+The checkpoint records the item as stored in the attached table, and it decides how
+`put` writes:
+
+- **With a checkpoint for the table:** `put` sends an `update_item` that sets only the
+  attributes that changed, including any index keys built from them, and removes any
+  that are gone. If nothing changed, nothing is sent. The update requires the item to
+  still exist, so a deleted item isn't recreated with only the changed attributes.
+- **Otherwise:** `put` sends a `put_item` of the whole item, replacing any existing item
+  with the same primary key.
+
+After writing to the attached table, `put` checkpoints the model, as that table now
+holds its state. Passing a different table is a one-off put: the model isn't attached
+to it, and its attachment and checkpoint are left as they are. Attaching a model to a
+different table, or detaching it, drops its checkpoint.
+
+A model
+whose primary key has changed since its checkpoint can't be updated, because DynamoDB
+can't change an item's key, so `put` raises `ValueError`. Detach it first to write it as
+a new item; the old item is left in place.
+
+```python
+order = Order.get(table, customer_id="c1", date="2024-01-01", order_id="o1")
+order.status = "shipped"
+order.put()  # Updates status and the LSI1SK key built from it
+```
+
+### `delete`
+
+`order.delete(table)` deletes the model's item, using the table the model is attached
+to by default. If the model has a checkpoint for the table, the item is found by the
+checkpointed primary key, so it's still the stored item that's deleted after the key
+attributes change. Otherwise the key is generated from the model. Deleting from the
+attached table drops the checkpoint, so a later `put` writes the whole item; the model
+stays attached. Deleting from a different table leaves the checkpoint as it is.
+
+### `remove`
+
+`Order.remove(table, customer_id="c1", date="2024-01-01", order_id="o1")` deletes an
+item without needing its model. Like `get`, it builds the primary key from the keyword
+arguments, and a missing key attribute raises `KeyError`.
+
 ### `query`
 
 `query` builds the key condition from attribute values, and turns any remaining values
@@ -115,6 +163,13 @@ This has three limitations:
 
 The filter is on the table's primary key attributes, which DynamoDB copies into every
 secondary index, so the same filtering applies when you scan an index.
+
+### `put` writes attributes as pydantic dumps them
+
+`put` sends `model_dump(by_alias=True)` to boto3 unchanged. Attribute types that boto3
+can't serialise, such as `float` (use `Decimal`) or `datetime`, make the write fail.
+Key templates format values with `str.format`, so a `None` attribute becomes the text
+`"None"` in its key rather than leaving that index's key out.
 
 ### Query and scan arguments are checked lazily
 
