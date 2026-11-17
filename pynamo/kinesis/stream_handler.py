@@ -35,6 +35,11 @@ from .events import (
     KinesisEventRecord,
     LambdaContext,
 )
+from .exceptions import (
+    HandlerNotFoundError,
+    LambdaTimeoutException,
+    UnhandledUserCodeException,
+)
 
 log = logging.getLogger(__name__)
 
@@ -42,18 +47,6 @@ _deserializer = TypeDeserializer()
 
 type Handler[M: BaseModel] = Callable[[M | None, M | None], None]
 """A change callback, given the item's old and new images (`None` where absent)."""
-
-
-class HandlerNotFoundError(Exception):
-    """No registered model and event pair accepts a change record."""
-
-
-class UnhandledUserCodeException(Exception):
-    """A registered handler raised while `raise_on_error` was set."""
-
-
-class LambdaTimeoutException(Exception):
-    """The Lambda invocation is about to time out."""
 
 
 class ParsedChange(NamedTuple):
