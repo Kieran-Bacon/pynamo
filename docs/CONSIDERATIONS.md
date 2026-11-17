@@ -52,7 +52,7 @@ Use `put` for these changes.
 result. The field's type and validators, such as `ge=0`, are only checked when the
 returned item is validated, after the write.
 
-## GraphQL API (`pynamo.new_graphql_api`)
+## GraphQL API (`pynamo.graphql_api`)
 
 ### Only some Python types map to GraphQL
 

@@ -1,10 +1,9 @@
 """Serve pydantic models through AWS AppSync, with Lambda as a direct resolver.
 
-A work-in-progress replacement for `pynamo.graphql_api`. `events` types the AppSync
-Lambda event, `errors` the exceptions raised, `resolvers` the functions resolving root
-fields, `schema` the GraphQL schema built from them, `codec` the conversion of
-arguments and results, and `router` the `Router` tying them together. The public API
-is re-exported here.
+`events` types the AppSync Lambda event, `errors` the exceptions raised, `resolvers`
+the functions resolving root fields, `schema` the GraphQL schema built from them,
+`codec` the conversion of arguments and results, and `router` the `Router` tying them
+together. The public API is re-exported here.
 """
 
 from .errors import ArgumentError, GraphQLApiError, ResolverNotFoundError, SchemaError

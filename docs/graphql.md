@@ -1,6 +1,6 @@
 # GraphQL API
 
-`pynamo.new_graphql_api` serves pydantic models, including `DynamoModel`s, through an
+`pynamo.graphql_api` serves pydantic models, including `DynamoModel`s, through an
 AWS AppSync API, using one Lambda function as a direct resolver. Python functions are
 registered on a `Router`, which generates the API's schema from their signatures and
 resolves the events AppSync sends.
@@ -20,7 +20,7 @@ Decorate functions with `router.query()` or `router.mutation()` to make them fie
 annotation its type:
 
 ```python
-from pynamo.new_graphql_api import ID, Router
+from pynamo.graphql_api import ID, Router
 
 router = Router()
 
@@ -71,7 +71,7 @@ published under its converted Python name.
 | Python | GraphQL |
 | --- | --- |
 | `str`, `int`, `float`, `bool` | `String`, `Int`, `Float`, `Boolean` |
-| `ID` (from `pynamo.new_graphql_api`) | `ID` |
+| `ID` (from `pynamo.graphql_api`) | `ID` |
 | `Decimal` | `Float` |
 | `datetime`, `date`, `time` | `AWSDateTime`, `AWSDate`, `AWSTime` |
 | `dict`, `dict[K, V]` | `AWSJSON` |

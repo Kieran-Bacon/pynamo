@@ -14,3 +14,12 @@ dependencies = [
 graphql = [
     "graphql-core>=3.3.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
