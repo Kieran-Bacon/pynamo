@@ -199,40 +199,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pynamo"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "boto3" },
-    { name = "botocore" },
-    { name = "mypy-boto3-dynamodb" },
-    { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-graphql = [
-    { name = "graphql-core" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "boto3", specifier = ">=1.44.3" },
-    { name = "botocore", specifier = ">=1.44.3" },
-    { name = "graphql-core", marker = "extra == 'graphql'", specifier = ">=3.3.2" },
-    { name = "mypy-boto3-dynamodb", specifier = ">=1.44.0" },
-    { name = "pydantic", specifier = ">=2.14.3" },
-]
-provides-extras = ["graphql"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.0.0" }]
-
-[[package]]
 name = "pytest"
 version = "9.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -280,6 +246,40 @@ sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
 ]
+
+[[package]]
+name = "tidal"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
+    { name = "mypy-boto3-dynamodb" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+graphql = [
+    { name = "graphql-core" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "boto3", specifier = ">=1.44.3" },
+    { name = "botocore", specifier = ">=1.44.3" },
+    { name = "graphql-core", marker = "extra == 'graphql'", specifier = ">=3.3.2" },
+    { name = "mypy-boto3-dynamodb", specifier = ">=1.44.0" },
+    { name = "pydantic", specifier = ">=2.14.3" },
+]
+provides-extras = ["graphql"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.0" }]
 
 [[package]]
 name = "typing-extensions"

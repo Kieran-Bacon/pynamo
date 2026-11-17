@@ -8,8 +8,8 @@ import os
 
 import boto3
 
-from pynamo.dynamo import DynamoModel, Page, conditions, increment, single_table_indexes
-from pynamo.graphql_api import Router
+from tidal.api import Router
+from tidal.models import DynamoModel, Page, conditions, increment, single_table_indexes
 
 # Set the table every model uses before anything reads or writes
 dynamo_table = boto3.resource("dynamodb").Table(os.environ["DYNAMO_TABLE"])

@@ -3,7 +3,7 @@
 These are the limitations and quirks of the implementation, to be worked into the
 package documentation.
 
-## Dynamo models
+## Models (`tidal.models`)
 
 ### The default table is inherited by class attribute lookup
 
@@ -52,7 +52,7 @@ Use `put` for these changes.
 result. The field's type and validators, such as `ge=0`, are only checked when the
 returned item is validated, after the write.
 
-## GraphQL API (`pynamo.graphql_api`)
+## GraphQL API (`tidal.api`)
 
 ### Only some Python types map to GraphQL
 
@@ -148,3 +148,37 @@ the same name converter object, since resolver names are converted when register
 A resolver annotated `-> Page[User]` may return a plain `Page`, as `DynamoModel.query`
 does. The fields published, and the annotations used to encode them, come from the
 return annotation, not from the returned object.
+
+## Streams (`tidal.streams`)
+
+### Changes are matched to models by validation
+
+A change is given to the first model registered for its event that validates its image. Nothing checks the item's key, so a model can accept another item type's changes when its fields are a subset of the other's, or when lax conversions let the other's values through. Register the more specific model first, and give item types a required field the others lack. Generated key attributes such as `PK` and `SK` can't tell models apart, because pydantic ignores attributes a model doesn't declare.
+
+### Images aren't attached to a table
+
+The images passed to handlers are validated with `model_validate`, so they aren't attached or checkpointed like models read with `get`. Calling `put` on one writes the whole item to the default table. To change the item, `update` it, or `get` it and then `put` it.
+
+### A failing handler's change is skipped by default
+
+When a handler raises, the exception is logged and the batch carries on, so that change is never retried. Pass `raise_on_error=True` to fail the invocation instead, which makes Lambda retry the batch.
+
+### An unmatched change blocks its shard
+
+`HandlerNotFoundError` fails the whole invocation, and Lambda retries the batch until the record succeeds or expires from the stream. Records behind it on the same shard wait until then. Register a handler for every item type and event the table produces, or limit retries on the event source mapping with `MaximumRetryAttempts` and `BisectBatchOnFunctionError`.
+
+### Retries repeat changes that were already handled
+
+A failed invocation is retried from the start of the batch, and a timeout from the unfinished record. Handlers that already ran for earlier records in the batch run again. AWS also documents that Kinesis Data Streams for DynamoDB can deliver a change more than once, and out of order. Handlers should be idempotent, and can compare `ApproximateCreationDateTime` or the item's own version if order matters.
+
+### Only Kinesis delivery is supported
+
+Records must come from a Kinesis streaming destination. Lambda events from DynamoDB Streams have a different shape and aren't supported. Each change must carry its item images, otherwise it raises `HandlerNotFoundError`.
+
+### The timeout uses `SIGALRM`
+
+The timeout is scheduled with `signal.alarm`, which replaces any other `SIGALRM` handler while the batch runs. Where `SIGALRM` doesn't exist, such as on Windows, there's no timeout handling. Lambda runs on Linux, so this only affects local runs.
+
+### Handlers are synchronous and their results are ignored
+
+Handlers are plain functions called one record at a time, in batch order. `async def` handlers aren't awaited, and return values are discarded.

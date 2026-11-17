@@ -9,8 +9,8 @@ import os
 
 import boto3
 
-from pynamo.dynamo import DynamoModel, Page, gt, single_table_indexes
-from pynamo.graphql_api import ID, AppSyncEvent, Router
+from tidal.api import ID, AppSyncEvent, Router
+from tidal.models import DynamoModel, Page, gt, single_table_indexes
 
 # Every model reads and writes this table unless given another
 DynamoModel.default_table(boto3.resource("dynamodb").Table(os.environ["DYNAMO_TABLE"]))
