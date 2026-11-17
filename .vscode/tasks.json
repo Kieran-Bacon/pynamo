@@ -1,0 +1,47 @@
+{
+    // Tasks for measuring test coverage; run them from "Tasks: Run Task"
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // Runs the tests; pyproject.toml's addopts write the HTML report to htmlcov/
+            "label": "Coverage: run tests",
+            "type": "process",
+            "command": "uv",
+            "args": ["run", "--extra", "graphql", "python", "-m", "pytest"],
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            }
+        },
+        {
+            // Runs the tests, then opens the HTML report in the default browser
+            "label": "Coverage: open HTML report",
+            "dependsOn": "Coverage: run tests",
+            "type": "shell",
+            "command": "open htmlcov/index.html",
+            "windows": {
+                "command": "Start-Process htmlcov/index.html",
+                "options": {
+                    "shell": {
+                        "executable": "powershell.exe",
+                        "args": ["-NoProfile", "-Command"]
+                    }
+                }
+            },
+            "linux": {
+                "command": "xdg-open htmlcov/index.html"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "silent"
+            }
+        }
+    ]
+}

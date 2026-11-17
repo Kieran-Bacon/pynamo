@@ -4,3 +4,8 @@ build/
 
 # Python bytecode caches
 __pycache__/
+
+# Coverage data and HTML report
+.coverage
+.coverage.*
+htmlcov/

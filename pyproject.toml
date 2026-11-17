@@ -18,8 +18,24 @@ graphql = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--import-mode=importlib"]
+# Measure coverage of the package on every run, reported in the terminal and as HTML
+addopts = [
+    "--import-mode=importlib",
+    "--cov=tidal",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=html",
+]
+
+[tool.coverage.run]
+# Count branches taken, not only lines run
+branch = true
+source = ["tidal"]
+
+[tool.coverage.html]
+# Write the HTML report to htmlcov/, which is gitignored
+directory = "htmlcov"
