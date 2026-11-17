@@ -97,6 +97,24 @@ class DynamoModel(pydantic.BaseModel):
     _checkpoint: dict | None = None
 
     @classmethod
+    def default_table(cls, table: Table | None = None) -> Table:
+        """Set and get the table to use for this model, or raise if none is given or attached."""
+        # TODO update this so that the default table is separate from the instance table
+        # this should check this class for the table, if it is not there, it should look
+        # in the parent classes for the table. Raise an error if no table is found in the class or any of its parents.
+        # Make all the other methods take table optionally and they call this method to get the table to use.
+
+        if table is not None:
+            cls._table = table
+
+        if cls._table is None:
+            raise ValueError(
+                f"{cls.__name__} has no default table; pass one to the method or "
+                "attach the model to a table with `attach`"
+            )
+        return cls._table
+
+    @classmethod
     def __pydantic_init_subclass__(cls, **kwargs):
         """Validate a subclass's `indexes` and cache what `query` and `put` need.
 
@@ -477,6 +495,62 @@ class DynamoModel(pydantic.BaseModel):
         if attached:
             self._checkpoint = None
         return self
+
+    @classmethod
+    def update(cls, table: Table, /, **kwargs) -> Self:
+        """Update an item by its primary key, without needing its model.
+
+        Args:
+            table: The table to update; positional-only, so a key attribute can
+                also be named `table`
+            **kwargs: Values for the attributes in the primary key templates and any
+                other attributes to update
+
+        Returns:
+            The updated model, attached to `table` and checkpointed
+
+        Raises:
+            ValueError: If no attributes are supplied for update or DynamoDB rejects
+                the request
+            KeyError: If a primary key template attribute has no value
+        """
+        key = cls._primary_key(kwargs)
+        primary = cls._primary_index
+        key_attributes = _template_fields(primary.pk_template) | _template_fields(
+            primary.sk_template
+        )
+        updates = {
+            name: value for name, value in kwargs.items() if name not in key_attributes
+        }
+        if not updates:
+            raise ValueError("At least one non-primary-key attribute must be supplied")
+
+        # TODO should check that the values being updated are valid according to the model attributes and their validators
+        # How does support for updating nested attributes work? Should we support that? If so, how do we handle the attribute names and values in the update expression?
+        # TODO to support the required increment feature needed. should be able to specify Model.update(table, user_id="u1", post_id="p1", content="new content", likes=Comparator.increment(1))
+
+        names = {f"#u{i}": name for i, name in enumerate(updates)}
+        values = {f":u{i}": value for i, value in enumerate(updates.values())}
+        update_expression = "SET " + ", ".join(
+            f"#u{i} = :u{i}" for i in range(len(updates))
+        )
+
+        try:
+            response = table.update_item(
+                Key=key,
+                UpdateExpression=update_expression,
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+            new_obj = cls.model_validate(response["Attributes"])
+            new_obj.attach(table)
+            new_obj.checkpoint()
+            return new_obj
+        except botocore.exceptions.ClientError as exc:
+            raise ValueError(
+                f"Validation error on table={table} key={key} - {exc.response['Error']['Code']} {exc.response['Error']['Message']}"
+            ) from exc
 
     @classmethod
     def remove(cls, table: Table, /, **kwargs) -> None:
