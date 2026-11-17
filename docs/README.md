@@ -41,7 +41,7 @@ import logging
 
 import boto3
 
-from tidal.api import ID, Router
+from tidal.api import Router
 from tidal.models import DynamoModel, single_table_indexes
 from tidal.streams import DynamoStreamHandler
 
@@ -54,7 +54,7 @@ class User(DynamoModel):
 
     indexes = single_table_indexes(base=("USER#{user_id}", "USER"))
 
-    user_id: ID
+    user_id: str
     name: str
 
 
@@ -63,13 +63,13 @@ router = Router()
 
 
 @router.query()
-def get_user(user_id: ID) -> User:
+def get_user(user_id: str) -> User:
     """Get a user by ID."""
     return User.get(user_id=user_id)
 
 
 @router.mutation()
-def rename_user(user_id: ID, name: str) -> User:
+def rename_user(user_id: str, name: str) -> User:
     """Change a user's name."""
     return User.update(user_id=user_id, name=name)
 

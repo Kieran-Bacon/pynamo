@@ -61,6 +61,10 @@ Unions of more than one type besides `None`, `Literal`, `tuple`, and generics ot
 aren't generated. `Decimal` is published as `Float`, so clients see a double, which can
 lose precision.
 
+### Identifiers are published as `String`
+
+The `ID` scalar is never generated, so identifiers appear as `String` in the schema. AppSync handles the two the same way. A marker type for `ID` would have to be imported into model definitions, which would tie models to the API package and its `graphql` dependency.
+
 ### Model properties are fields only when annotated
 
 A model's public properties are output fields if they have a return annotation.

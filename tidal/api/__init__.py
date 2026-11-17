@@ -19,10 +19,9 @@ from .events import (
     PreviousResult,
 )
 from .router import Router
-from .schema import ID, NameConverter
+from .schema import NameConverter
 
 __all__ = [
-    "ID",
     "AppSyncEvent",
     "AppSyncInfo",
     "AppSyncRequest",

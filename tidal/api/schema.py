@@ -3,8 +3,8 @@
 The schema is only needed to deploy the API; resolving events doesn't use it. Python
 annotations map to GraphQL types as follows:
 
-- `str`, `int`, `float` and `bool` map to the built-in scalars, `Decimal` to `Float`,
-  and `ID` to `ID`.
+- `str`, `int`, `float` and `bool` map to the built-in scalars, and `Decimal` to
+  `Float`.
 - `datetime`, `date` and `time` map to `AWSDateTime`, `AWSDate` and `AWSTime`, and
   `dict` to `AWSJSON`.
 - `list`, `set` and `frozenset` map to lists.
@@ -38,7 +38,6 @@ from graphql import (
     GraphQLEnumValue,
     GraphQLField,
     GraphQLFloat,
-    GraphQLID,
     GraphQLInputField,
     GraphQLInputObjectType,
     GraphQLInt,
@@ -55,9 +54,6 @@ from graphql import (
 from ..models import Page
 from .errors import SchemaError
 from .resolvers import Operation, Resolver
-
-type ID = str
-"""A unique identifier, published as GraphQL's `ID` scalar."""
 
 type NameConverter = Callable[[str], str]
 """Converts a Python field, argument or resolver name to its GraphQL name."""
@@ -79,7 +75,6 @@ _SCALARS: dict[Any, GraphQLScalarType] = {
     float: GraphQLFloat,
     bool: GraphQLBoolean,
     decimal.Decimal: GraphQLFloat,
-    ID: GraphQLID,
     dict: _AWS_JSON,
     datetime.datetime: _AWS_DATE_TIME,
     datetime.date: _AWS_DATE,
@@ -115,7 +110,7 @@ def _description(doc: str | None) -> str | None:
 
 
 def unwrap_annotation(annotation: Any) -> tuple[Any, bool]:
-    """Strip `Annotated`, type aliases (other than `ID`) and `None` from an annotation.
+    """Strip `Annotated`, type aliases and `None` from an annotation.
 
     Returns:
         The underlying annotation, and whether the annotation accepts None
@@ -128,7 +123,7 @@ def unwrap_annotation(annotation: Any) -> tuple[Any, bool]:
         if typing.get_origin(annotation) is Annotated:
             # Metadata such as pydantic constraints doesn't affect the GraphQL type
             annotation = typing.get_args(annotation)[0]
-        elif isinstance(annotation, TypeAliasType) and annotation is not ID:
+        elif isinstance(annotation, TypeAliasType):
             annotation = annotation.__value__
         elif typing.get_origin(annotation) is UnionType:
             members = typing.get_args(annotation)

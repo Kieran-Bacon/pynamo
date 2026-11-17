@@ -19,19 +19,19 @@ Decorate functions with `router.query()` or `router.mutation()` to make them fie
 annotation its type:
 
 ```python
-from tidal.api import ID, Router
+from tidal.api import Router
 
 router = Router()
 
 
 @router.query()
-def get_user(user_id: ID) -> User:
+def get_user(user_id: str) -> User:
     """Get a user by ID."""
     return User.get(user_id=user_id)
 
 
 @router.mutation(deprecation_reason="Use renameUser")
-def update_user(user_id: ID, name: str | None = None) -> User: ...
+def update_user(user_id: str, name: str | None = None) -> User: ...
 ```
 
 This publishes:
@@ -39,11 +39,11 @@ This publishes:
 ```graphql
 type Query {
   """Get a user by ID."""
-  getUser(userId: ID!): User!
+  getUser(userId: String!): User!
 }
 
 type Mutation {
-  updateUser(userId: ID!, name: String): User! @deprecated(reason: "Use renameUser")
+  updateUser(userId: String!, name: String): User! @deprecated(reason: "Use renameUser")
 }
 ```
 
@@ -70,7 +70,6 @@ published under its converted Python name.
 | Python | GraphQL |
 | --- | --- |
 | `str`, `int`, `float`, `bool` | `String`, `Int`, `Float`, `Boolean` |
-| `ID` (from `tidal.api`) | `ID` |
 | `Decimal` | `Float` |
 | `datetime`, `date`, `time` | `AWSDateTime`, `AWSDate`, `AWSTime` |
 | `dict`, `dict[K, V]` | `AWSJSON` |

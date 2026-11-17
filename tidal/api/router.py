@@ -6,7 +6,7 @@ router is then used as the Lambda handler:
     router = Router()
 
     @router.query()
-    def get_user(user_id: ID) -> User: ...
+    def get_user(user_id: str) -> User: ...
 
     def lambda_handler(event, context):
         return router(event, context)

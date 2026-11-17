@@ -11,7 +11,7 @@ from pydantic.alias_generators import to_camel
 
 from tidal.api import AppSyncEvent, SchemaError
 from tidal.api.resolvers import Resolver
-from tidal.api.schema import ID, build_schema, print_sdl
+from tidal.api.schema import build_schema, print_sdl
 from tidal.models import DynamoModel, Page, single_table_indexes
 
 
@@ -28,7 +28,7 @@ class Post(DynamoModel):
 class User(DynamoModel):
     indexes = single_table_indexes(base=("USER#{user_id}", "USER"))
 
-    user_id: ID
+    user_id: str
     name: str = pydantic.Field(description="Display name")
     age: int
 
@@ -90,7 +90,7 @@ def test_docs_example():
             }
 
             type User {
-              userId: ID!
+              userId: String!
 
               """Display name"""
               name: String!

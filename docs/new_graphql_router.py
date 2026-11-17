@@ -9,7 +9,7 @@ import os
 
 import boto3
 
-from tidal.api import ID, AppSyncEvent, Router
+from tidal.api import AppSyncEvent, Router
 from tidal.models import DynamoModel, Page, gt, single_table_indexes
 
 # Every model reads and writes this table unless given another
@@ -21,8 +21,8 @@ class Post(DynamoModel):
 
     indexes = single_table_indexes(base=("USER#{user_id}", "POST#{post_id}"))
 
-    user_id: ID
-    post_id: ID
+    user_id: str
+    post_id: str
     content: str
 
 
@@ -35,7 +35,7 @@ class User(DynamoModel):
         global_indexes=[("USERS", "USER#{user_id}")],
     )
 
-    user_id: ID
+    user_id: str
     name: str
     age: int
 
@@ -50,7 +50,7 @@ router = Router()
 
 
 @router.query()
-def get_user(user_id: ID) -> User:
+def get_user(user_id: str) -> User:
     """Get a user by ID."""
     return User.get(user_id=user_id)
 
@@ -65,7 +65,7 @@ def list_users(
 
 
 @router.mutation()
-def update_user(user_id: ID, name: str | None = None, age: int | None = None) -> User:
+def update_user(user_id: str, name: str | None = None, age: int | None = None) -> User:
     """Update a user's name or age; arguments left out are left unchanged."""
     changes = {"name": name, "age": age}
     updates = {key: value for key, value in changes.items() if value is not None}
