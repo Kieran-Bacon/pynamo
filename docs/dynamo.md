@@ -2,7 +2,8 @@
 
 `pynamo.dynamo.DynamoModel` is a pydantic base class for items stored in a DynamoDB
 table. A model declares how its keys are built from its attributes, and can then be
-read with `get`, `query` and `scan`.
+read with `get`, `query` and `scan`, and changed with `put`, `update`, `delete` and
+`remove`.
 
 ## Defining a model
 
@@ -35,6 +36,30 @@ These rules are checked when the class is defined:
   properties. Nested fields like `{owner.id}` are rejected, so expose a nested value as
   a top-level property instead. Format specs like `{n:010d}` are allowed.
 
+## Choosing the table
+
+Every method takes a table, which is optional:
+
+- `get`, `update` and `remove` take it as the first positional argument, so a key
+  attribute can also be called `table`.
+- `query` and `scan` take it as the keyword `table=`.
+- `put` and `delete` default to the table the model is attached to.
+
+When no table is given, the default table set with `default_table` is used. A default
+applies to the class and its subclasses, unless a subclass sets its own, so setting it
+on `DynamoModel` covers every model:
+
+```python
+table = boto3.resource("dynamodb").Table("app")
+DynamoModel.default_table(table)
+
+Order.get(customer_id="c1", date="2024-01-01", order_id="o1")  # Reads from `table`
+```
+
+The default table is separate from the table an instance is attached to. An instance
+uses a table it's given first, then its attached table, then the default. Writing an
+unattached model to the default table doesn't attach it.
+
 ## Reading items
 
 ### `get`
@@ -47,7 +72,8 @@ and checkpointed.
 
 `order.put(table)` writes the model, the inverse of `get`. The stored item is the
 model's `model_dump(by_alias=True)` plus every index's key attributes, generated from
-the templates. The table defaults to the one the model is attached to.
+the templates. The table defaults to the one the model is attached to, then the default
+table.
 
 Models are attached and checkpointed when they're read with `get`, `query` or `scan`.
 The checkpoint records the item as stored in the attached table, and it decides how
@@ -85,6 +111,35 @@ attributes change. Otherwise the key is generated from the model. Deleting from 
 attached table drops the checkpoint, so a later `put` writes the whole item; the model
 stays attached. Deleting from a different table leaves the checkpoint as it is.
 
+### `update`
+
+`update` changes an existing item by its primary key, without needing its model. Pass
+the primary key attributes and the attributes to change:
+
+```python
+from pynamo.dynamo import increment
+
+Account.update(account_id="a1", plan="pro")
+Account.update(account_id="a1", identity={"username": "new"})
+Account.update(account_id="a1", likes=increment(1))
+```
+
+- **Values are validated before anything is sent.** Each one is checked with its field's
+  type and field validators. Unknown fields raise `TypeError`, and invalid values raise
+  `pydantic.ValidationError`.
+- **A mapping for a field holding a model updates only the keys it names.** This works at
+  any depth, and the other keys in the stored map are left alone. Pass `None` to clear a
+  key. Pass a model instance to replace the whole attribute.
+- **Any other value replaces the attribute**, including lists and dicts.
+- **`increment(n)` adds `n` to a number in DynamoDB**, starting from 0 if the attribute
+  is missing. Use a negative `n` to decrement.
+- **Index keys are rewritten.** Secondary index keys built from an updated attribute are
+  regenerated, which needs a plain value for every attribute in that key.
+- **The item must already exist**, otherwise `update` raises `KeyError`.
+
+It returns the updated item, attached and checkpointed. See
+[CONSIDERATIONS.md](CONSIDERATIONS.md) for its limitations.
+
 ### `remove`
 
 `Order.remove(table, customer_id="c1", date="2024-01-01", order_id="o1")` deletes an
@@ -99,7 +154,7 @@ into filters. It yields one `Page` per DynamoDB request:
 ```python
 from pynamo.dynamo import between
 
-for page in Order.query(table, {"customer_id": "c1", "date": between("2024-01", "2024-03")}):
+for page in Order.query({"customer_id": "c1", "date": between("2024-01", "2024-03")}):
     for order in page.items:
         ...
     for invalid in page.errors:
@@ -119,7 +174,7 @@ for page in Order.query(table, {"customer_id": "c1", "date": between("2024-01", 
 is optional.
 
 ```python
-for page in Order.scan(table, {"status": "open"}):
+for page in Order.scan({"status": "open"}):
     ...
 ```
 
@@ -174,5 +229,5 @@ Key templates format values with `str.format`, so a `None` attribute becomes the
 ### Query and scan arguments are checked lazily
 
 `query` and `scan` are generators, so invalid arguments raise when the first page is
-requested, not when the method is called. Examples are an unknown attribute, an
-unknown index, a non-positive `limit`, or a missing partition key value.
+requested, not when the method is called. Examples are a missing table, an unknown
+attribute, an unknown index, a non-positive `limit`, or a missing partition key value.

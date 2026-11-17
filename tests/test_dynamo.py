@@ -2,6 +2,7 @@ import unittest
 from typing import ClassVar
 from unittest.mock import Mock
 
+import botocore.exceptions
 import pydantic
 from boto3.dynamodb.conditions import ConditionExpressionBuilder
 
@@ -14,6 +15,7 @@ from pynamo.dynamo import (
     between,
     gt,
     gte,
+    increment,
     lt,
     ne,
     single_table_indexes,
@@ -135,9 +137,9 @@ class DynamoModelTests(unittest.TestCase):
 
         page = next(
             AuditLog.query(
-                table,
                 {"user_id": "user-1", "timestamp": between("2020", "2022")},
                 index_name="GSI1",
+                table=table,
             )
         )
 
@@ -204,7 +206,7 @@ class QueryTests(unittest.TestCase):
         self.table.query.return_value = {"Items": []}
 
     def query(self, *args, **kwargs):
-        next(Order.query(self.table, *args, **kwargs))
+        next(Order.query(*args, table=self.table, **kwargs))
         request = self.table.query.call_args.kwargs
         key = _render(request["KeyConditionExpression"], is_key_condition=True)
         filter_expression = request.get("FilterExpression")
@@ -284,15 +286,15 @@ class QueryTests(unittest.TestCase):
 
     def test_partition_key_values_are_required(self):
         with self.assertRaisesRegex(ValueError, "order_id are required"):
-            next(Order.query(self.table, {"customer_id": "c1"}, "GSI1"))
+            next(Order.query({"customer_id": "c1"}, "GSI1", table=self.table))
         with self.assertRaisesRegex(ValueError, "must be given as plain values"):
-            next(Order.query(self.table, {"customer_id": begins_with("c")}))
+            next(Order.query({"customer_id": begins_with("c")}, table=self.table))
 
     def test_unknown_attributes_and_indexes_are_rejected(self):
         with self.assertRaisesRegex(TypeError, "colour"):
-            next(Order.query(self.table, {"customer_id": "c1", "colour": "red"}))
+            next(Order.query({"customer_id": "c1", "colour": "red"}, table=self.table))
         with self.assertRaisesRegex(ValueError, "no index named 'GSI9'"):
-            next(Order.query(self.table, {"customer_id": "c1"}, "GSI9"))
+            next(Order.query({"customer_id": "c1"}, "GSI9", table=self.table))
 
     def test_attributes_can_share_names_with_query_parameters(self):
         class Setting(DynamoModel):
@@ -304,8 +306,8 @@ class QueryTests(unittest.TestCase):
 
         next(
             Setting.query(
-                self.table,
                 {"table": "t1", "limit": gte(5), "index_name": "i1"},
+                table=self.table,
                 limit=10,
             )
         )
@@ -325,7 +327,7 @@ class QueryTests(unittest.TestCase):
             {"Items": [_order_item(), _order_item()]},
         ]
 
-        pages = list(Order.query(self.table, {"customer_id": "c1"}, limit=3))
+        pages = list(Order.query({"customer_id": "c1"}, table=self.table, limit=3))
 
         # Each request passes the limit straight to DynamoDB and resumes from the last
         first_request, second_request = (
@@ -345,7 +347,7 @@ class QueryTests(unittest.TestCase):
         invalid = _order_item(total="lots")
         self.table.query.return_value = {"Items": [_order_item(), invalid]}
 
-        page = next(Order.query(self.table, {"customer_id": "c1"}))
+        page = next(Order.query({"customer_id": "c1"}, table=self.table))
 
         # The valid item is still returned alongside the failure
         self.assertEqual(len(page.items), 1)
@@ -404,7 +406,7 @@ class PutTests(unittest.TestCase):
         self.order.attach(self.table).put()
         self.table.put_item.assert_called_once()
 
-        with self.assertRaisesRegex(ValueError, "not attached to a table"):
+        with self.assertRaisesRegex(ValueError, "has no table"):
             Order.model_validate(_order_item()).put()
 
     def test_key_templates_can_use_properties(self):
@@ -513,7 +515,7 @@ class DeleteTests(unittest.TestCase):
         self.assertEqual(order._checkpoint, checkpoint)
 
     def test_requires_a_table(self):
-        with self.assertRaisesRegex(ValueError, "not attached to a table"):
+        with self.assertRaisesRegex(ValueError, "has no table"):
             Order.model_validate(_order_item()).delete()
 
 
@@ -553,7 +555,7 @@ class ScanTests(unittest.TestCase):
         self.table.scan.return_value = {"Items": []}
 
     def scan(self, *args, **kwargs):
-        next(Order.scan(self.table, *args, **kwargs))
+        next(Order.scan(*args, table=self.table, **kwargs))
         return self.table.scan.call_args.kwargs
 
     def test_without_values_items_are_matched_by_primary_key_prefixes(self):
@@ -570,7 +572,7 @@ class ScanTests(unittest.TestCase):
             source: str
             at: str
 
-        next(Event.scan(self.table))
+        next(Event.scan(table=self.table))
         request = self.table.scan.call_args.kwargs
         self.assertEqual(
             _render(request["FilterExpression"]), "begins_with(SK, 'EVENT#')"
@@ -600,11 +602,11 @@ class ScanTests(unittest.TestCase):
 
     def test_unknown_attributes_and_indexes_are_rejected(self):
         with self.assertRaisesRegex(TypeError, "colour"):
-            next(Order.scan(self.table, {"colour": "red"}))
+            next(Order.scan({"colour": "red"}, table=self.table))
         with self.assertRaisesRegex(ValueError, "no index named 'GSI9'"):
-            next(Order.scan(self.table, index_name="GSI9"))
+            next(Order.scan(index_name="GSI9", table=self.table))
         with self.assertRaisesRegex(ValueError, "limit must be a positive integer"):
-            next(Order.scan(self.table, limit=0))
+            next(Order.scan(limit=0, table=self.table))
 
     def test_yields_pages_and_collects_invalid_items(self):
         invalid = _order_item(total="lots")
@@ -613,7 +615,7 @@ class ScanTests(unittest.TestCase):
             {"Items": [_order_item(), invalid]},
         ]
 
-        pages = list(Order.scan(self.table))
+        pages = list(Order.scan(table=self.table))
 
         # The second request resumes from the first page's token
         second_request = self.table.scan.call_args_list[1].kwargs
@@ -624,6 +626,187 @@ class ScanTests(unittest.TestCase):
         self.assertIs(pages[0].items[0]._table, self.table)
         self.assertEqual([page.errors[0].item for page in pages[1:]], [invalid])
         self.assertEqual([page.token for page in pages], [{"PK": "a"}, None])
+
+
+class DefaultTableTests(unittest.TestCase):
+    """A default table is inherited by subclasses and is separate from attachment."""
+
+    def setUp(self):
+        class Base(DynamoModel):
+            indexes = single_table_indexes(base=("ITEM#{item_id}", "ITEM"))
+
+            item_id: str
+
+        class Child(Base):
+            pass
+
+        self.Base, self.Child = Base, Child
+        self.table = Mock()
+        self.table.get_item.return_value = {"Item": {"item_id": "i1"}}
+
+    def test_subclasses_inherit_a_parents_default(self):
+        self.Base.default_table(self.table)
+        self.assertIs(self.Child.default_table(), self.table)
+
+        # Items read from the default table are attached to it
+        item = self.Child.get(item_id="i1")
+        self.table.get_item.assert_called_once()
+        self.assertIs(item._table, self.table)
+
+    def test_a_subclass_default_does_not_change_its_parent(self):
+        self.Base.default_table(self.table)
+        other = Mock()
+        self.Child.default_table(other)
+        self.assertIs(self.Base.default_table(), self.table)
+        self.assertIs(self.Child.default_table(), other)
+
+    def test_missing_default_is_reported(self):
+        with self.assertRaisesRegex(ValueError, "Child has no table"):
+            self.Child.get(item_id="i1")
+
+    def test_attached_and_given_tables_take_precedence(self):
+        self.Base.default_table(self.table)
+        attached, given = Mock(), Mock()
+
+        # An unattached model uses the default without attaching to it
+        item = self.Child(item_id="i1")
+        item.put()
+        self.table.put_item.assert_called_once()
+        self.assertIsNone(item._table)
+
+        item.attach(attached).put()
+        attached.put_item.assert_called_once()
+        item.put(given)
+        given.put_item.assert_called_once()
+
+
+class Identity(pydantic.BaseModel):
+    """A nested model, for partial updates."""
+
+    username: str | None
+    email: str | None = pydantic.Field(alias="Email")
+
+    @pydantic.field_validator("username")
+    @classmethod
+    def _lower(cls, value: str | None) -> str | None:
+        """Store usernames in lower case."""
+        return value.lower() if value is not None else None
+
+
+class Account(DynamoModel):
+    indexes = single_table_indexes(
+        base=("ACCOUNT#{account_id}", "ACCOUNT"),
+        global_indexes=[("PLAN#{plan}", "REGION#{region}#{account_id}#{plan}")],
+    )
+
+    account_id: str
+    plan: str
+    region: str
+    likes: int = pydantic.Field(default=0, ge=0)
+    identity: Identity | None = None
+
+    @pydantic.model_validator(mode="after")
+    def _check_region(self) -> Account:
+        """A model validator that would fail on a partially validated model."""
+        if self.region not in {"eu", "us"}:
+            raise ValueError("unknown region")
+        return self
+
+
+def _account_item(**overrides):
+    """Get a stored Account item, with any attributes overridden."""
+    account = Account(account_id="a1", plan="free", region="eu")
+    return account.model_dump(by_alias=True) | overrides
+
+
+class UpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.table = Mock()
+        self.table.update_item.return_value = {"Attributes": _account_item()}
+
+    def update(self, **kwargs):
+        """Update account a1 and get the arguments sent, with placeholders inlined."""
+        Account.update(self.table, account_id="a1", **kwargs)
+        arguments = self.table.update_item.call_args.kwargs
+        expression = arguments["UpdateExpression"]
+        # Replace longest placeholders first so #u10 is not clobbered by #u1
+        placeholders = arguments["ExpressionAttributeNames"] | {
+            key: repr(value)
+            for key, value in arguments["ExpressionAttributeValues"].items()
+        }
+        for placeholder in sorted(placeholders, key=len, reverse=True):
+            expression = expression.replace(placeholder, placeholders[placeholder])
+        return arguments, expression
+
+    def test_sets_validated_values_on_an_existing_item(self):
+        arguments, expression = self.update(likes="3")
+        self.assertEqual(expression, "SET likes = 3")
+        self.assertEqual(arguments["Key"], {"PK": "ACCOUNT#a1", "SK": "ACCOUNT"})
+        self.assertEqual(
+            _render(arguments["ConditionExpression"]), "attribute_exists(PK)"
+        )
+        self.assertEqual(arguments["ReturnValues"], "ALL_NEW")
+
+    def test_returns_the_updated_model_attached_and_checkpointed(self):
+        account = Account.update(self.table, account_id="a1", likes=1)
+        self.assertEqual(
+            account.model_dump(), Account.model_validate(_account_item()).model_dump()
+        )
+        self.assertIs(account._table, self.table)
+        self.assertIsNotNone(account._checkpoint)
+
+    def test_invalid_values_and_unknown_fields_are_rejected(self):
+        with self.assertRaises(pydantic.ValidationError):
+            Account.update(self.table, account_id="a1", likes=-1)
+        with self.assertRaisesRegex(TypeError, "colour"):
+            Account.update(self.table, account_id="a1", colour="red")
+        with self.assertRaisesRegex(TypeError, "nickname"):
+            Account.update(self.table, account_id="a1", identity={"nickname": "x"})
+        self.table.update_item.assert_not_called()
+
+    def test_model_validators_are_not_run_on_the_partial_update(self):
+        _, expression = self.update(likes=2)
+        self.assertEqual(expression, "SET likes = 2")
+
+    def test_mappings_update_only_the_named_nested_keys(self):
+        _, expression = self.update(identity={"username": "NEW", "email": None})
+        self.assertEqual(
+            expression, "SET identity.username = 'new', identity.Email = None"
+        )
+
+    def test_model_instances_replace_the_attribute(self):
+        identity = Identity(username="New", Email="a@b.c")
+        _, expression = self.update(identity=identity)
+        self.assertEqual(
+            expression, "SET identity = {'username': 'new', 'Email': 'a@b.c'}"
+        )
+
+    def test_increment_starts_missing_attributes_at_zero(self):
+        _, expression = self.update(likes=increment(2))
+        self.assertEqual(expression, "SET likes = if_not_exists(likes, 0) + 2")
+        with self.assertRaises(TypeError):
+            increment(1.5)  # ty: ignore[invalid-argument-type]
+
+    def test_index_keys_built_from_updated_attributes_are_rewritten(self):
+        _, expression = self.update(plan="pro", region="us")
+        self.assertEqual(
+            expression,
+            "SET plan = 'pro', region = 'us', GSI1PK = 'PLAN#pro', "
+            "GSI1SK = 'REGION#us#a1#pro'",
+        )
+
+    def test_index_keys_need_every_attribute_they_are_built_from(self):
+        with self.assertRaisesRegex(ValueError, "changes GSI1SK.*plan"):
+            Account.update(self.table, account_id="a1", region="us")
+        self.table.update_item.assert_not_called()
+
+    def test_a_missing_item_is_a_key_error(self):
+        self.table.update_item.side_effect = botocore.exceptions.ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "no"}},
+            "UpdateItem",
+        )
+        with self.assertRaisesRegex(KeyError, "Could not find entry"):
+            Account.update(self.table, account_id="a1", likes=1)
 
 
 class TemplateFieldTests(unittest.TestCase):

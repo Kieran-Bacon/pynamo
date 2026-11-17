@@ -1,7 +1,7 @@
 """Pydantic models stored in DynamoDB.
 
-`indexes` defines key layouts, `conditions` the query comparators, and `base` the
-`DynamoModel` class. The public API is re-exported here.
+`indexes` defines key layouts, `conditions` the query comparators, `updates` the
+update actions, and `base` the `DynamoModel` class. The public API is re-exported here.
 """
 
 from .base import DynamoModel, InvalidItem, Page
@@ -37,6 +37,7 @@ from .indexes import (
     PrimaryIndex,
     single_table_indexes,
 )
+from .updates import Increment, UpdateAction, increment
 
 __all__ = [
     "BeginsWith",
@@ -49,6 +50,7 @@ __all__ = [
     "GreaterThan",
     "GreaterThanOrEqual",
     "In",
+    "Increment",
     "Index",
     "InvalidItem",
     "LessThan",
@@ -58,12 +60,14 @@ __all__ = [
     "NotExists",
     "Page",
     "PrimaryIndex",
+    "UpdateAction",
     "begins_with",
     "between",
     "contains",
     "exists",
     "gt",
     "gte",
+    "increment",
     "is_in",
     "lt",
     "lte",

@@ -9,3 +9,8 @@ dependencies = [
     "mypy-boto3-dynamodb>=1.44.0",
     "pydantic>=2.14.3",
 ]
+
+[project.optional-dependencies]
+graphql = [
+    "graphql-core>=3.3.2",
+]

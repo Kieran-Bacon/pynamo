@@ -1,8 +1,9 @@
 """The `DynamoModel` base class for pydantic models stored in a DynamoDB table.
 
 Subclasses declare their table's `indexes` (see `.indexes`) and gain `get`, `query` and
-`scan` (see `.conditions` for comparators) and `attach` / `checkpoint` for change
-tracking.
+`scan` (see `.conditions` for comparators), `update` (see `.updates` for actions) and
+`attach` / `checkpoint` for change tracking. Every method takes a table, which defaults
+to the one set with `default_table`.
 """
 
 import datetime
@@ -31,6 +32,7 @@ from .indexes import (
     _formatter,
     _template_fields,
 )
+from .updates import _collect, _UpdateExpression
 
 
 class InvalidItem(pydantic.BaseModel):
@@ -83,6 +85,7 @@ class DynamoModel(pydantic.BaseModel):
         _indexes: Each index by name, with the primary index under None
         _query_attributes: The attributes `query` and `scan` accept values for
         _key_templates: Each key attribute name and its template, for `put`
+        _default_table: The table used when none is given, set with `default_table`
         _table: The table the model is attached to, if any
         _checkpoint: The stored item when last checkpointed, which `put` diffs against
     """
@@ -92,27 +95,36 @@ class DynamoModel(pydantic.BaseModel):
     _indexes: ClassVar[dict[str | None, Index]]
     _query_attributes: ClassVar[frozenset[str]]
     _key_templates: ClassVar[tuple[tuple[str, str], ...]]
+    _default_table: ClassVar[Table | None] = None
 
     _table: Table | None = None
     _checkpoint: dict | None = None
 
     @classmethod
     def default_table(cls, table: Table | None = None) -> Table:
-        """Set and get the table to use for this model, or raise if none is given or attached."""
-        # TODO update this so that the default table is separate from the instance table
-        # this should check this class for the table, if it is not there, it should look
-        # in the parent classes for the table. Raise an error if no table is found in the class or any of its parents.
-        # Make all the other methods take table optionally and they call this method to get the table to use.
+        """Set and get the table used when a method isn't given one.
 
+        A default applies to the class and its subclasses, unless a subclass sets its
+        own, so `DynamoModel.default_table(table)` sets it for every model. It is
+        separate from the table an instance is attached to, which takes precedence.
+
+        Args:
+            table: The table to set as the default, or None to only get it
+
+        Raises:
+            ValueError: If neither this class nor a parent has a default table
+        """
+        # Set on this class only, so parents and sibling models keep their defaults
         if table is not None:
-            cls._table = table
+            cls._default_table = table
 
-        if cls._table is None:
+        # Class attribute lookup falls back to the nearest parent's default
+        if cls._default_table is None:
             raise ValueError(
-                f"{cls.__name__} has no default table; pass one to the method or "
-                "attach the model to a table with `attach`"
+                f"{cls.__name__} has no table: pass one, attach the model to one, or "
+                "set a default with `default_table`"
             )
-        return cls._table
+        return cls._default_table
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs):
@@ -351,20 +363,6 @@ class DynamoModel(pydantic.BaseModel):
             arguments["ExpressionAttributeValues"] = values
         return arguments
 
-    def _target_table(self, table: Table | None) -> Table:
-        """Get the given table, or the attached one if None.
-
-        Raises:
-            ValueError: If no table is given and the model isn't attached to one
-        """
-        if table is None:
-            table = self._table
-        if table is None:
-            raise ValueError(
-                f"{type(self).__name__} is not attached to a table, so one must be given"
-            )
-        return table
-
     @classmethod
     def _primary_key(cls, values: Mapping[str, Any]) -> dict[str, str]:
         """Generate the primary key from attribute values, for `get` and `remove`.
@@ -379,18 +377,54 @@ class DynamoModel(pydantic.BaseModel):
         }
 
     @classmethod
-    def get(cls, table: Table, /, **kwargs) -> Self:
+    def _updated_keys(
+        cls, updates: Mapping[str, Any], values: Mapping[str, Any]
+    ) -> dict[str, str]:
+        """Regenerate the secondary index keys built from updated attributes, for `update`.
+
+        Args:
+            updates: The attributes being updated, by name
+            values: The primary key values and the validated values of attributes set
+                whole, which the keys are built from
+
+        Raises:
+            ValueError: If a changed key needs an attribute without a plain value
+        """
+        primary = cls._primary_index
+        keys = {}
+        for key_name, template in cls._key_templates:
+            fields = _template_fields(template)
+
+            # The primary key can't change, and other keys only change with their fields
+            updated = sorted(fields & updates.keys())
+            if key_name in (primary.pk_name, primary.sk_name) or not updated:
+                continue
+
+            # The whole key is rewritten, so every attribute in it needs a value
+            missing = sorted(fields - values.keys())
+            if missing:
+                raise ValueError(
+                    f"Updating {', '.join(updated)} changes {key_name} ({template!r}), "
+                    f"so {', '.join(missing)} must also be given plain values; keys "
+                    "built from properties can only be changed with `put`"
+                )
+            keys[key_name] = _formatter.vformat(template, (), values)
+        return keys
+
+    @classmethod
+    def get(cls, table: Table | None = None, /, **kwargs) -> Self:
         """Get an item by its primary key, attached to `table` and check pointed.
 
         Args:
-            table: The table to read from; positional-only, so a key attribute can
-                also be named `table`
+            table: The table to read from, or None for the default table;
+                positional-only, so a key attribute can also be named `table`
             **kwargs: Values for the attributes in the primary key templates
 
         Raises:
-            ValueError: If DynamoDB rejects the request
+            ValueError: If there is no table, or DynamoDB rejects the request
             KeyError: If no item has the key, or a key attribute has no value
         """
+        table = table or cls.default_table()
         key = cls._primary_key(kwargs)
 
         try:
@@ -422,7 +456,8 @@ class DynamoModel(pydantic.BaseModel):
         they are.
 
         Args:
-            table: The table to write to; defaults to the table the model is attached to
+            table: The table to write to; defaults to the table the model is attached
+                to, else the default table
 
         Returns:
             This model, for chaining
@@ -432,7 +467,7 @@ class DynamoModel(pydantic.BaseModel):
                 has changed, or DynamoDB rejects the request (including updating an
                 item that no longer exists)
         """
-        table = self._target_table(table)
+        table = table or self._table or self.default_table()
 
         item = self._item()
         attached = table is self._table
@@ -465,7 +500,8 @@ class DynamoModel(pydantic.BaseModel):
         another table leaves it as it is.
 
         Args:
-            table: The table to delete from; defaults to the table the model is attached to
+            table: The table to delete from; defaults to the table the model is
+                attached to, else the default table
 
         Returns:
             This model, for chaining
@@ -473,7 +509,7 @@ class DynamoModel(pydantic.BaseModel):
         Raises:
             ValueError: If there is no table to delete from, or DynamoDB rejects the request
         """
-        table = self._target_table(table)
+        table = table or self._table or self.default_table()
         attached = table is self._table
 
         # Prefer the key the item was stored under to the key it would have now
@@ -497,74 +533,95 @@ class DynamoModel(pydantic.BaseModel):
         return self
 
     @classmethod
-    def update(cls, table: Table, /, **kwargs) -> Self:
-        """Update an item by its primary key, without needing its model.
+    def update(cls, table: Table | None = None, /, **kwargs) -> Self:
+        """Update an existing item by its primary key, without needing its model.
+
+        Values are validated with their field's type and field validators (but not
+        model validators) before anything is sent. A mapping for a field that holds a
+        model updates only the keys it names; any other value, including a model
+        instance, replaces the attribute. `UpdateAction`s such as `increment` are
+        applied by DynamoDB. Secondary index keys built from updated attributes are
+        regenerated. E.g.
+
+            Post.update(user_id="u1", post_id="p1", content="new", likes=increment(1))
+            User.update(user_id="u1", identity={"username": "new"})
 
         Args:
-            table: The table to update; positional-only, so a key attribute can
-                also be named `table`
-            **kwargs: Values for the attributes in the primary key templates and any
-                other attributes to update
+            table: The table to update, or None for the default table; positional-only,
+                so a key attribute can also be named `table`
+            **kwargs: Values for the attributes in the primary key templates and the
+                updates to the other attributes
 
         Returns:
             The updated model, attached to `table` and checkpointed
 
         Raises:
-            ValueError: If no attributes are supplied for update or DynamoDB rejects
-                the request
-            KeyError: If a primary key template attribute has no value
+            TypeError: If an updated field doesn't exist on the model
+            ValueError: If there is no table, nothing to update, an invalid value, a
+                changed index key can't be regenerated, or DynamoDB rejects the request
+            KeyError: If no item has the key, or a primary key attribute has no value
         """
+        table = table or cls.default_table()
         key = cls._primary_key(kwargs)
         primary = cls._primary_index
+
+        # Split the primary key values from the updates
         key_attributes = _template_fields(primary.pk_template) | _template_fields(
             primary.sk_template
         )
+        key_values = {
+            name: value for name, value in kwargs.items() if name in key_attributes
+        }
         updates = {
             name: value for name, value in kwargs.items() if name not in key_attributes
         }
         if not updates:
             raise ValueError("At least one non-primary-key attribute must be supplied")
 
-        # TODO should check that the values being updated are valid according to the model attributes and their validators
-        # How does support for updating nested attributes work? Should we support that? If so, how do we handle the attribute names and values in the update expression?
-        # TODO to support the required increment feature needed. should be able to specify Model.update(table, user_id="u1", post_id="p1", content="new content", likes=Comparator.increment(1))
-
-        names = {f"#u{i}": name for i, name in enumerate(updates)}
-        values = {f":u{i}": value for i, value in enumerate(updates.values())}
-        update_expression = "SET " + ", ".join(
-            f"#u{i} = :u{i}" for i in range(len(updates))
-        )
+        # Validate each update into a SET clause, then rewrite keys built from them
+        expression = _UpdateExpression()
+        validated = _collect(cls, updates, (), expression)
+        for key_name, value in cls._updated_keys(
+            updates, key_values | validated
+        ).items():
+            expression.set((key_name,), value)
 
         try:
             response = table.update_item(
                 Key=key,
-                UpdateExpression=update_expression,
-                ExpressionAttributeNames=names,
-                ExpressionAttributeValues=values,
+                **expression.arguments(),
+                # Fail rather than create a partial item if there is no item to update
+                ConditionExpression=Attr(primary.pk_name).exists(),
                 ReturnValues="ALL_NEW",
             )
-            new_obj = cls.model_validate(response["Attributes"])
-            new_obj.attach(table)
-            new_obj.checkpoint()
-            return new_obj
         except botocore.exceptions.ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise KeyError(
+                    f"Could not find entry for key {key} in dynamo table {table}"
+                ) from exc
             raise ValueError(
                 f"Validation error on table={table} key={key} - {exc.response['Error']['Code']} {exc.response['Error']['Message']}"
             ) from exc
 
+        new_obj = cls.model_validate(response["Attributes"])
+        new_obj.attach(table)
+        new_obj.checkpoint()
+        return new_obj
+
     @classmethod
-    def remove(cls, table: Table, /, **kwargs) -> None:
+    def remove(cls, table: Table | None = None, /, **kwargs) -> None:
         """Delete an item by its primary key, without needing its model.
 
         Args:
-            table: The table to delete from; positional-only, so a key attribute can
-                also be named `table`
+            table: The table to delete from, or None for the default table;
+                positional-only, so a key attribute can also be named `table`
             **kwargs: Values for the attributes in the primary key templates
 
         Raises:
-            ValueError: If DynamoDB rejects the request
+            ValueError: If there is no table, or DynamoDB rejects the request
             KeyError: If a key attribute has no value
         """
+        table = table or cls.default_table()
         key = cls._primary_key(kwargs)
 
         try:
@@ -577,10 +634,10 @@ class DynamoModel(pydantic.BaseModel):
     @classmethod
     def query(
         cls,
-        table: Table,
         values: Mapping[str, Any],
         index_name: str | None = None,
         *,
+        table: Table | None = None,
         limit: int | None = None,
         scan_forward: bool = True,
         consistent_read: bool = False,
@@ -592,26 +649,28 @@ class DynamoModel(pydantic.BaseModel):
         narrow the key condition; the rest become filters. Items that fail validation
         are put in the page's `errors` rather than raised. E.g.
 
-            for page in Order.query(table, {"customer_id": "c1", "status": "open"}):
+            for page in Order.query({"customer_id": "c1", "status": "open"}):
                 for order in page.items:
                     ...
                 for invalid in page.errors:
                     ...
 
         Args:
-            table: The table to query; returned items are attached to it
             values: Attribute values or comparators to query on, by attribute name
             index_name: A secondary index to query, or None for the primary index
+            table: The table to query, or None for the default table; returned items
+                are attached to it
             limit: DynamoDB's `Limit`, applied to each request
             scan_forward: Return items in ascending sort key order
             consistent_read: Use strongly consistent reads
             start_token: A page's token to resume the query from
 
         Raises:
-            ValueError: If `limit` isn't positive, the index doesn't exist, or a
-                partition key value is missing
+            ValueError: If there is no table, `limit` isn't positive, the index doesn't
+                exist, or a partition key value is missing
             TypeError: If `values` names an attribute the model doesn't have
         """
+        table = table or cls.default_table()
         request, index = cls._request(
             values, index_name, limit, consistent_read, start_token
         )
@@ -645,10 +704,10 @@ class DynamoModel(pydantic.BaseModel):
     @classmethod
     def scan(
         cls,
-        table: Table,
         values: Mapping[str, Any] | None = None,
         index_name: str | None = None,
         *,
+        table: Table | None = None,
         limit: int | None = None,
         consistent_read: bool = False,
         start_token: dict | None = None,
@@ -659,24 +718,27 @@ class DynamoModel(pydantic.BaseModel):
         the key templates (e.g. `CUSTOMER#`), and every value becomes a filter. Items
         that fail validation are put in the page's `errors` rather than raised. E.g.
 
-            for page in Order.scan(table, {"status": "open"}):
+            for page in Order.scan({"status": "open"}):
                 for order in page.items:
                     ...
                 for invalid in page.errors:
                     ...
 
         Args:
-            table: The table to scan; returned items are attached to it
             values: Attribute values or comparators to filter on, by attribute name
             index_name: A secondary index to scan, or None for the table
+            table: The table to scan, or None for the default table; returned items
+                are attached to it
             limit: DynamoDB's `Limit`, applied to each request
             consistent_read: Use strongly consistent reads
             start_token: A page's token to resume the scan from
 
         Raises:
-            ValueError: If `limit` isn't positive or the index doesn't exist
+            ValueError: If there is no table, `limit` isn't positive or the index
+                doesn't exist
             TypeError: If `values` names an attribute the model doesn't have
         """
+        table = table or cls.default_table()
         values = values or {}
         request, _ = cls._request(
             values, index_name, limit, consistent_read, start_token
