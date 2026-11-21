@@ -1,4 +1,4 @@
-"""Fixtures shared by the `tidal.models` tests."""
+"""Fixtures shared by the `pynamo.models` tests."""
 
 from collections.abc import Callable
 from typing import Any
@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 from boto3.dynamodb.conditions import ConditionBase, ConditionExpressionBuilder
 
-from tidal.models import DynamoModel, single_table_indexes
+from pynamo.models import DynamoModel, single_table_indexes
 
 
 @pytest.fixture

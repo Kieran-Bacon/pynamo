@@ -3,7 +3,7 @@
 These are the limitations and quirks of the implementation, to be worked into the
 package documentation.
 
-## Models (`tidal.models`)
+## Models (`pynamo.models`)
 
 ### Every model declares its own `Meta`
 
@@ -86,7 +86,7 @@ Each model builds its own partition key from the query's values, and the keys mu
 
 The item filter checks every model's partition and sort key prefixes, even though the key condition already fixes the partition key. The partition key prefix check is redundant, but it keeps the filter the same as the one each model's `scan` uses.
 
-## GraphQL API (`tidal.api`)
+## GraphQL API (`pynamo.api`)
 
 ### Only some Python types map to GraphQL
 
@@ -187,7 +187,7 @@ A resolver annotated `-> Page[User]` may return a plain `Page`, as `DynamoModel.
 does. The fields published, and the annotations used to encode them, come from the
 return annotation, not from the returned object.
 
-## Streams (`tidal.streams`)
+## Streams (`pynamo.streams`)
 
 ### Changes are matched to models by validation
 

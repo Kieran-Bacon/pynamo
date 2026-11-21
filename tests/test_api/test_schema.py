@@ -1,4 +1,4 @@
-"""Tests for building the AppSync schema from resolvers in `tidal.api`."""
+"""Tests for building the AppSync schema from resolvers in `pynamo.api`."""
 
 import datetime
 import decimal
@@ -9,10 +9,10 @@ import pydantic
 import pytest
 from pydantic.alias_generators import to_camel
 
-from tidal.api import AppSyncEvent, SchemaError
-from tidal.api.resolvers import Resolver
-from tidal.api.schema import build_schema, print_sdl
-from tidal.models import DynamoModel, Page, single_table_indexes
+from pynamo.api import AppSyncEvent, SchemaError
+from pynamo.api.resolvers import Resolver
+from pynamo.api.schema import build_schema, print_sdl
+from pynamo.models import DynamoModel, Page, single_table_indexes
 
 
 class Post(DynamoModel):

@@ -6,7 +6,7 @@ Notes from 2026-11-17, to pick up the next session. Nothing below has been imple
 
 - Branch `feature/graphql`, working tree clean apart from this file. Nothing has been pushed.
 - Recent commits:
-  - `7a01b77` removed the GraphQL `ID` type, so models don't depend on `tidal.api`. Identifiers are published as `String`, as noted in `docs/CONSIDERATIONS.md`.
+  - `7a01b77` removed the GraphQL `ID` type, so models don't depend on `pynamo.api`. Identifiers are published as `String`, as noted in `docs/CONSIDERATIONS.md`.
   - `e7f6b76` measures test coverage on every pytest run.
   - `46b5ced` renamed the package to `tidal`.
   - `11c2cf8` switched the tests to pytest, with one test file per module.
@@ -20,7 +20,7 @@ Notes from 2026-11-17, to pick up the next session. Nothing below has been imple
 
 ### 1. `indexes` on the class body reserves a field name
 
-A model can't have a field called `indexes`, because `DynamoModel` reads it as a `ClassVar` (`tidal/models/base.py`, in `__pydantic_init_subclass__`). The same applies to the method names: `get`, `put`, `query`, `scan`, `update`, `delete`, `remove`, `attach`, `checkpoint`. Pydantic has the same problem with `model_*`, and nothing can fully avoid it.
+A model can't have a field called `indexes`, because `DynamoModel` reads it as a `ClassVar` (`src/pynamo/models/base.py`, in `__pydantic_init_subclass__`). The same applies to the method names: `get`, `put`, `query`, `scan`, `update`, `delete`, `remove`, `attach`, `checkpoint`. Pydantic has the same problem with `model_*`, and nothing can fully avoid it.
 
 The plan is to move the model's options into a single container. **This is the first decision to make**, as everything else builds on it.
 
@@ -35,7 +35,7 @@ The plan is to move the model's options into a single container. **This is the f
 
 ### 2. Keys that are plain columns (non-single-table designs)
 
-Today every key is a separate attribute, generated from a `str.format` template (`tidal/models/indexes.py`). With a template like `"{user_id}"`, the key is converted to a string and written alongside the field. That breaks number keys, which DynamoDB stores as `N`, and turns comparisons on the sort key, such as `gt` on a numeric `created_at`, into string comparisons.
+Today every key is a separate attribute, generated from a `str.format` template (`src/pynamo/models/indexes.py`). With a template like `"{user_id}"`, the key is converted to a string and written alongside the field. That breaks number keys, which DynamoDB stores as `N`, and turns comparisons on the sort key, such as `gt` on a numeric `created_at`, into string comparisons.
 
 Proposal: each key is one of two kinds.
 
@@ -99,6 +99,6 @@ Open question: should `default_table` stay, or does setting `table_name` on a ba
 
 ## Smaller open items
 
-- **`EventName` in `tidal/streams/events.py`:** keep it as a `Literal`, so users can pass plain strings without importing anything. But build `ALL_EVENTS` from it with `typing.get_args(EventName.__value__)` instead of repeating the values, and have `stream.handle` reject unknown event names. Not yet confirmed.
+- **`EventName` in `src/pynamo/streams/events.py`:** keep it as a `Literal`, so users can pass plain strings without importing anything. But build `ALL_EVENTS` from it with `typing.get_args(EventName.__value__)` instead of repeating the values, and have `stream.handle` reject unknown event names. Not yet confirmed.
 - **Page tokens in the API:** keep `AWSJSON`, or switch to an opaque string token? Undecided.
 - **The users and posts example (`docs/new_graphql_router.py`):** `Post.query({"user_id": ...})` with no sort key condition also reads the `User` item in that partition, wasting a read. It needs a sort key prefix condition, which the column and template key work may affect.

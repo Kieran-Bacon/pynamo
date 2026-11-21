@@ -1,12 +1,12 @@
-"""Tests for reading and writing `DynamoModel`s with `tidal.models.base`."""
+"""Tests for reading and writing `DynamoModel`s with `pynamo.models.base`."""
 
 from typing import ClassVar
 from unittest.mock import Mock
 
 import pytest
 
-from tidal.models import DynamoModel, KeyPair, LocalIndex, single_table_indexes
-from tidal.models.conditions import GreaterThanOrEqual
+from pynamo.models import DynamoModel, KeyPair, LocalIndex, single_table_indexes
+from pynamo.models.conditions import GreaterThanOrEqual
 
 ORDER_KEY = {"PK": "CUSTOMER#c1", "SK": "ORDER#2024-01-01#o1"}
 """The primary key of the item `order_item` returns."""

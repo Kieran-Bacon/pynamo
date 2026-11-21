@@ -3,7 +3,7 @@
 `base` holds the `DynamoModel` class, `meta` the `Meta` settings it reads, and `indexes`
 the key layouts, which are re-exported here as every model declares them. Query
 comparators and update actions are used from their own modules, `conditions` and
-`updates`, e.g. `from tidal.models.conditions import Between`.
+`updates`, e.g. `from pynamo.models.conditions import Between`.
 """
 
 from .base import DynamoModel, InvalidItem, Page

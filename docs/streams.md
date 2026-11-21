@@ -1,8 +1,8 @@
 # Streams
 
-`tidal.streams` runs your code after items change. DynamoDB publishes every change to an item, whether it's an insert, a modification or a removal, to a Kinesis data stream. Lambda reads that stream in batches, and `DynamoStreamHandler` validates the item before and after each change as one of your pydantic models and calls the function registered for it.
+`pynamo.streams` runs your code after items change. DynamoDB publishes every change to an item, whether it's an insert, a modification or a removal, to a Kinesis data stream. Lambda reads that stream in batches, and `DynamoStreamHandler` validates the item before and after each change as one of your pydantic models and calls the function registered for it.
 
-This is the event-driven half of a tidal application. A [resolver](api.md) or any other writer only has to [store a model](models.md); the follow-on work, such as sending notifications, keeping counts, copying data to a search index or auditing changes, happens here. The follow-on work runs after the write has succeeded, and no writer needs to know about it.
+This is the event-driven half of a pynamo application. A [resolver](api.md) or any other writer only has to [store a model](models.md); the follow-on work, such as sending notifications, keeping counts, copying data to a search index or auditing changes, happens here. The follow-on work runs after the write has succeeded, and no writer needs to know about it.
 
 ## Setting up the stream
 
@@ -16,7 +16,7 @@ This is the event-driven half of a tidal application. A [resolver](api.md) or an
 Create a `DynamoStreamHandler` and decorate functions with `handle`, naming the model whose changes they handle:
 
 ```python
-from tidal.streams import DynamoStreamHandler
+from pynamo.streams import DynamoStreamHandler
 
 stream = DynamoStreamHandler()
 

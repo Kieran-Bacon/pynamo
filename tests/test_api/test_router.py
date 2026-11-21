@@ -1,18 +1,18 @@
-"""Tests for registering resolvers and dispatching events with `tidal.api`."""
+"""Tests for registering resolvers and dispatching events with `pynamo.api`."""
 
 from typing import Any
 
 import pydantic
 import pytest
 
-from tidal.api import (
+from pynamo.api import (
     AppSyncEvent,
     ArgumentError,
     ResolverNotFoundError,
     Router,
     SchemaError,
 )
-from tidal.models import Page
+from pynamo.models import Page
 
 
 class Post(pydantic.BaseModel):

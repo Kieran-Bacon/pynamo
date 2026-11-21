@@ -1,13 +1,13 @@
-"""Tests for querying several models at once with `tidal.models.collection`."""
+"""Tests for querying several models at once with `pynamo.models.collection`."""
 
 from typing import ClassVar
 from unittest.mock import Mock
 
 import pytest
 
-from tidal.models import DynamoModel, KeyPair, PrimaryIndex, single_table_indexes
-from tidal.models.collection import DynamoCollection
-from tidal.models.conditions import GreaterThanOrEqual
+from pynamo.models import DynamoModel, KeyPair, PrimaryIndex, single_table_indexes
+from pynamo.models.collection import DynamoCollection
+from pynamo.models.conditions import GreaterThanOrEqual
 
 
 class User(DynamoModel):

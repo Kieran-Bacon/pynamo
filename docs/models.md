@@ -1,8 +1,8 @@
 # Models
 
-`tidal.models` is where data in a tidal application is defined and stored. `DynamoModel` is a pydantic base class for items stored in a DynamoDB table. A model declares how its keys are built from its attributes, and can then be read with `get`, `query` and `scan`, and changed with `put`, `update`, `delete` and `remove`.
+`pynamo.models` is where data in a pynamo application is defined and stored. `DynamoModel` is a pydantic base class for items stored in a DynamoDB table. A model declares how its keys are built from its attributes, and can then be read with `get`, `query` and `scan`, and changed with `put`, `update`, `delete` and `remove`.
 
-The same classes are used by the rest of tidal. [`tidal.api`](api.md) publishes them as GraphQL types, and [`tidal.streams`](streams.md) validates the item before and after each change as them. Every write made here, through `put`, `update`, `delete` or `remove`, is a change that stream handlers receive.
+The same classes are used by the rest of pynamo. [`pynamo.api`](api.md) publishes them as GraphQL types, and [`pynamo.streams`](streams.md) validates the item before and after each change as them. Every write made here, through `put`, `update`, `delete` or `remove`, is a change that stream handlers receive.
 
 ## Defining a model
 
@@ -11,7 +11,7 @@ the model's attributes. `single_table_indexes` names them using single-table
 conventions: `PK`/`SK`, `LSI<n>SK`, and `GSI<n>PK`/`GSI<n>SK`.
 
 ```python
-from tidal.models import DynamoModel, single_table_indexes
+from pynamo.models import DynamoModel, single_table_indexes
 
 
 class Order(DynamoModel):
@@ -116,7 +116,7 @@ stays attached. Deleting from a different table leaves the checkpoint as it is.
 the primary key's attributes, as for `get`, and then the changes:
 
 ```python
-from tidal.models import Increment
+from pynamo.models import Increment
 
 Account.update({"account_id": "a1"}, {"plan": "pro"})
 Account.update({"account_id": "a1"}, {"identity": {"username": "new"}})
@@ -152,7 +152,7 @@ item without needing its model. It takes the same `key` mapping as `get`.
 into filters. It yields one `Page` per DynamoDB request:
 
 ```python
-from tidal.models import between
+from pynamo.models import between
 
 for page in Order.query({"customer_id": "c1", "date": between("2024-01", "2024-03")}):
     for order in page.items:
@@ -183,7 +183,7 @@ for page in Order.scan({"status": "open"}):
 In a single-table design, different models often share a partition, such as a user's profile and their posts under `USER#{user_id}`. A `DynamoCollection` queries that partition once and returns each item as the model it belongs to:
 
 ```python
-from tidal.models.collection import DynamoCollection
+from pynamo.models.collection import DynamoCollection
 
 user_models = DynamoCollection(User, Post)
 

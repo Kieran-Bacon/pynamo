@@ -1,5 +1,5 @@
 [project]
-name = "tidal"
+name = "aws-pynamo"
 version = "0.1.0b1"
 description = "Event-driven applications on DynamoDB and AWS AppSync, built from pydantic models."
 readme = "docs/README.md"
@@ -22,16 +22,16 @@ graphql = [
     "graphql-core>=3.3.2",
 ]
 
-# Build with hatchling, shipping only the tidal package (not the stray root __init__.py)
+# Build with hatchling, shipping only the pynamo package (not the stray root __init__.py)
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["tidal"]
+packages = ["src/pynamo"]
 
 [tool.hatch.build.targets.sdist]
-include = ["tidal", "docs/README.md", "LICENSE"]
+include = ["src/pynamo", "docs/README.md", "LICENSE"]
 
 [dependency-groups]
 dev = [
@@ -44,7 +44,7 @@ testpaths = ["tests"]
 # Measure coverage of the package on every run, reported in the terminal and as HTML
 addopts = [
     "--import-mode=importlib",
-    "--cov=tidal",
+    "--cov=pynamo",
     "--cov-report=term-missing:skip-covered",
     "--cov-report=html",
 ]
@@ -52,7 +52,7 @@ addopts = [
 [tool.coverage.run]
 # Count branches taken, not only lines run
 branch = true
-source = ["tidal"]
+source = ["pynamo"]
 
 [tool.coverage.html]
 # Write the HTML report to htmlcov/, which is gitignored

@@ -1,35 +1,35 @@
-# tidal
+# pynamo
 
-tidal is a toolkit for building event-driven, serverless applications on DynamoDB and AWS AppSync with pydantic. You describe your data once, as pydantic models, and tidal uses those same models at every stage of a change's life:
+pynamo is a toolkit for building event-driven, serverless applications on DynamoDB and AWS AppSync with pydantic. You describe your data once, as pydantic models, and pynamo uses those same models at every stage of a change's life:
 
-1. **Stored**: [`tidal.models`](models.md) reads and writes the models in a DynamoDB table, building every key from the model's own attributes.
-2. **Served**: [`tidal.api`](api.md) publishes functions that take and return the models as an AppSync GraphQL API, generating the schema from their type hints.
-3. **Reacted to**: [`tidal.streams`](streams.md) hands every change to an item back to your code as a before and after pair of models, so work can follow on from a write without the writer knowing about it.
+1. **Stored**: [`pynamo.models`](models.md) reads and writes the models in a DynamoDB table, building every key from the model's own attributes.
+2. **Served**: [`pynamo.api`](api.md) publishes functions that take and return the models as an AppSync GraphQL API, generating the schema from their type hints.
+3. **Reacted to**: [`pynamo.streams`](streams.md) hands every change to an item back to your code as a before and after pair of models, so work can follow on from a write without the writer knowing about it.
 
 A change moves through an application like a tide. It comes in through the API, is written to the table, and then flows back out through the stream to whatever reacts to it:
 
 ```
-client ── GraphQL ──▶ AppSync ──▶ Lambda: tidal.api ──▶ DynamoDB: tidal.models
+client ── GraphQL ──▶ AppSync ──▶ Lambda: pynamo.api ──▶ DynamoDB: pynamo.models
                                                               │
                                                          item change
                                                               ▼
-                       Lambda: tidal.streams ◀───────── Kinesis data stream
+                       Lambda: pynamo.streams ◀───────── Kinesis data stream
 ```
 
 At every step the data is validated as the same pydantic class, so a field added to a model is stored, published in the schema and delivered to stream handlers without being declared anywhere else.
 
 ## Installation
 
-tidal needs Python 3.14 or later.
+pynamo needs Python 3.14 or later.
 
 ```
-pip install tidal
+pip install aws-pynamo
 ```
 
-`tidal.api` also needs `graphql-core`, which the `graphql` extra installs:
+`pynamo.api` also needs `graphql-core`, which the `graphql` extra installs:
 
 ```
-pip install "tidal[graphql]"
+pip install "aws-pynamo[graphql]"
 ```
 
 ## A model's life
@@ -41,9 +41,9 @@ import logging
 
 import boto3
 
-from tidal.api import Router
-from tidal.models import DynamoModel, single_table_indexes
-from tidal.streams import DynamoStreamHandler
+from pynamo.api import Router
+from pynamo.models import DynamoModel, single_table_indexes
+from pynamo.streams import DynamoStreamHandler
 
 DynamoModel.default_table(boto3.resource("dynamodb").Table("app"))
 
@@ -100,9 +100,9 @@ def stream_handler(event, context):
 
 The three subpackages share models but don't depend on each other:
 
-- `tidal.models` is a complete DynamoDB ORM without the API or streams.
-- `tidal.api` serves any pydantic model, not just `DynamoModel`s, so it can front data stored elsewhere.
-- `tidal.streams` validates change images as any pydantic model, so it can consume changes from a table written by other code.
+- `pynamo.models` is a complete DynamoDB ORM without the API or streams.
+- `pynamo.api` serves any pydantic model, not just `DynamoModel`s, so it can front data stored elsewhere.
+- `pynamo.streams` validates change images as any pydantic model, so it can consume changes from a table written by other code.
 
 ## Guides
 

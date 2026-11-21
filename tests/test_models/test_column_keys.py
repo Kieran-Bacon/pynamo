@@ -5,8 +5,8 @@ from typing import ClassVar
 import pydantic
 import pytest
 
-from tidal.models import DynamoModel, GlobalSecondaryIndex, KeyPair, PrimaryIndex
-from tidal.models.conditions import GreaterThan, NotEqual
+from pynamo.models import DynamoModel, GlobalSecondaryIndex, KeyPair, PrimaryIndex
+from pynamo.models.conditions import GreaterThan, NotEqual
 
 
 class Score(DynamoModel):

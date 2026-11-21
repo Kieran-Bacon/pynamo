@@ -1,10 +1,10 @@
-"""Tests for defining key layouts with `tidal.models.indexes`."""
+"""Tests for defining key layouts with `pynamo.models.indexes`."""
 
 from typing import ClassVar
 
 import pytest
 
-from tidal.models import (
+from pynamo.models import (
     DynamoModel,
     GlobalSecondaryIndex,
     KeyPair,

@@ -1,11 +1,11 @@
-"""Tests for reading a resolver's arguments and return type in `tidal.api.resolvers`."""
+"""Tests for reading a resolver's arguments and return type in `pynamo.api.resolvers`."""
 
 from typing import Annotated
 
 import pytest
 
-from tidal.api import AppSyncEvent, SchemaError
-from tidal.api.resolvers import Argument, Resolver
+from pynamo.api import AppSyncEvent, SchemaError
+from pynamo.api.resolvers import Argument, Resolver
 
 
 def test_parameters_become_arguments():

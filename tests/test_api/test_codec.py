@@ -1,4 +1,4 @@
-"""Tests for decoding arguments and encoding results in `tidal.api`."""
+"""Tests for decoding arguments and encoding results in `pynamo.api`."""
 
 import datetime
 import decimal
@@ -8,10 +8,10 @@ import pydantic
 import pytest
 from pydantic.alias_generators import to_camel
 
-from tidal.api import ArgumentError
-from tidal.api.codec import decode_arguments, encode_result
-from tidal.api.resolvers import Resolver
-from tidal.models import Page
+from pynamo.api import ArgumentError
+from pynamo.api.codec import decode_arguments, encode_result
+from pynamo.api.resolvers import Resolver
+from pynamo.models import Page
 
 
 class Colour(enum.Enum):

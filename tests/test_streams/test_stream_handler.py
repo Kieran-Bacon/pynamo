@@ -10,12 +10,12 @@ import pydantic
 import pytest
 from boto3.dynamodb.types import TypeSerializer
 
-from tidal.streams import (
+from pynamo.streams import (
     DynamoStreamHandler,
     HandlerNotFoundError,
     UnhandledUserCodeException,
 )
-from tidal.streams.events import EventName, KinesisEventRecord
+from pynamo.streams.events import EventName, KinesisEventRecord
 
 _serializer = TypeSerializer()
 
@@ -141,7 +141,7 @@ def test_handler_failures_are_logged_and_skipped(stream, context, caplog):
         _record("INSERT", new={"user_id": "u1", "email": "a@x"}, sequence_number="1"),
         _record("INSERT", new={"user_id": "u2", "email": "b@x"}, sequence_number="2"),
     ]
-    with caplog.at_level(logging.ERROR, logger="tidal.streams.stream_handler"):
+    with caplog.at_level(logging.ERROR, logger="pynamo.streams.stream_handler"):
         response = stream.lambda_handler({"Records": records}, context)
 
     assert response == {"batchItemFailures": []}
@@ -154,7 +154,7 @@ def test_raise_on_error_propagates_handler_failures(stream, context, caplog):
 
     record = _record("INSERT", new={"user_id": "u1", "email": "a@x"})
     with (
-        caplog.at_level(logging.ERROR, logger="tidal.streams.stream_handler"),
+        caplog.at_level(logging.ERROR, logger="pynamo.streams.stream_handler"),
         pytest.raises(UnhandledUserCodeException),
     ):
         stream.lambda_handler({"Records": [record]}, context, raise_on_error=True)

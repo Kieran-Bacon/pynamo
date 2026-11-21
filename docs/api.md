@@ -1,13 +1,13 @@
 # GraphQL API
 
-`tidal.api` is how a tidal application's data reaches clients. It serves pydantic models, including [`DynamoModel`s](models.md), through an AWS AppSync API, using one Lambda function as a direct resolver. Python functions are registered on a `Router`, which generates the API's schema from their signatures and resolves the events AppSync sends.
+`pynamo.api` is how a pynamo application's data reaches clients. It serves pydantic models, including [`DynamoModel`s](models.md), through an AWS AppSync API, using one Lambda function as a direct resolver. Python functions are registered on a `Router`, which generates the API's schema from their signatures and resolves the events AppSync sends.
 
 Resolvers only need to read and write models. Follow-on work, such as notifying other users or updating aggregates, can be left to [stream handlers](streams.md), which receive every change a mutation makes once it has been written.
 
 It needs the `graphql` extra, which installs `graphql-core`:
 
 ```
-pip install "tidal[graphql]"
+pip install "aws-pynamo[graphql]"
 ```
 
 [`new_graphql_router.py`](new_graphql_router.py) is a complete example.
@@ -19,7 +19,7 @@ Decorate functions with `router.query()` or `router.mutation()` to make them fie
 annotation its type:
 
 ```python
-from tidal.api import Router
+from pynamo.api import Router
 
 router = Router()
 

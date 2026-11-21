@@ -1,11 +1,11 @@
-"""Tests for building key conditions and filters from values in `tidal.models.conditions`."""
+"""Tests for building key conditions and filters from values in `pynamo.models.conditions`."""
 
 from unittest.mock import Mock
 
 import pytest
 
-from tidal.models import DynamoModel, single_table_indexes
-from tidal.models.conditions import (
+from pynamo.models import DynamoModel, single_table_indexes
+from pynamo.models.conditions import (
     BeginsWith,
     Between,
     GreaterThan,

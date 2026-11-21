@@ -1,11 +1,11 @@
-"""Tests for partial updates with `DynamoModel.update` and `tidal.models.updates`."""
+"""Tests for partial updates with `DynamoModel.update` and `pynamo.models.updates`."""
 
 import botocore.exceptions
 import pydantic
 import pytest
 
-from tidal.models import DynamoModel, single_table_indexes
-from tidal.models.updates import Increment
+from pynamo.models import DynamoModel, single_table_indexes
+from pynamo.models.updates import Increment
 
 
 class Identity(pydantic.BaseModel):
