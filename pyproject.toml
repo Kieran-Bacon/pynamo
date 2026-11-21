@@ -1,6 +1,6 @@
 [project]
 name = "aws-pynamo"
-version = "0.1.0b1"
+version = "0.1.0b2"
 description = "Event-driven applications on DynamoDB and AWS AppSync, built from pydantic models."
 readme = "docs/README.md"
 license = "MIT"
