@@ -11,9 +11,9 @@ A model's `Meta` must declare its own `indexes`, so a subclass of a model never 
 
 ### The default table is inherited by class attribute lookup
 
-`DynamoModel.default_table(table)` stores the table on the class it's called on.
-Subclasses find it through normal class attribute lookup, so the nearest class that
-set a default wins. It's one table per class for the whole process. If the table must
+`DynamoModel.default_table(table)` stores the table on the class it's called on, and
+`Meta.table` does the same when the model is defined. Subclasses find it through normal
+class attribute lookup, so the nearest class that set a default wins. It's one table per class for the whole process. If the table must
 differ per request, pass it to each call or set the default at the start of each
 request.
 
@@ -34,7 +34,7 @@ are replaced whole. To change part of a list, `get` the item, change it, and `pu
 
 ### Partial `update`s need the parent map to exist
 
-`identity={"username": "new"}` sets `identity.username` in DynamoDB. If the stored
+`{"identity": {"username": "new"}}` sets `identity.username` in DynamoDB. If the stored
 `identity` is missing or `null`, DynamoDB rejects the document path, and `update`
 raises `ValueError`. Set the whole attribute with a model instance first.
 
@@ -45,10 +45,9 @@ plain value: either one passed to `update` or a primary key value. An update tha
 touches a key attribute raises `ValueError` before anything is sent in these cases:
 
 - another attribute of that key isn't given;
-- the attribute is given a nested mapping or an `Increment`;
-- the key is built from a property.
+- the attribute is given a nested mapping or an `Increment`.
 
-Use `put` for these changes.
+A key built from a property is never rewritten, because `update` can't tell which fields the property reads. Changing those fields leaves the stored key with its old value, without an error. Use `put` for these changes.
 
 ### `Increment` isn't validated against the field
 
@@ -58,11 +57,11 @@ returned item is validated, after the write.
 
 ### Keys without a template are the model's own fields
 
-A key with no template, such as `PrimaryIndex(pk_name="player_id", sk_name="points")`, is the model field with the key's name. It's stored once, by the normal field dump, and keeps its type, so a number key is stored as a number. Some consequences:
+A key with no template, such as `PrimaryIndex(KeyPair("player_id"), KeyPair("points"))`, is the model field with the key's name. It's stored once, by the normal field dump, and keeps its type, so a number key is stored as a number. Some consequences:
 
 - The field must be stored under its own name, so a field with a different alias can't be a key. Defining the model raises `ValueError` otherwise.
-- Values passed to `get`, `remove`, `update` and `query` for the key are used as they are, without being validated as the field. A key that holds a number needs a number: `points="5"` won't match an item stored with `points=5`.
-- `between`, `begins_with`, `gt`, `gte`, `lt` and `lte` on a column sort key are applied to the key directly. The other comparators are filters.
+- Values passed to `get`, `remove`, `update` and `query` for the key are used as they are, without being validated as the field. A key that holds a number needs a number: `{"points": "5"}` won't match an item stored with `points=5`.
+- `Equal`, `Between`, `BeginsWith`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan` and `LessThanOrEqual` on a column sort key are applied to the key's value directly, so they compare it as its own type. The other comparators are filters.
 - `scan` and `DynamoCollection` have no key prefix to match on, so a model whose primary keys are both column keys matches every item in its table.
 
 ### Sort key ranges compare key text, not attribute values
@@ -183,8 +182,8 @@ the same name converter object, since resolver names are converted when register
 
 ### Generic models may be returned unparametrised
 
-A resolver annotated `-> Page[User]` may return a plain `Page`, as `DynamoModel.query`
-does. The fields published, and the annotations used to encode them, come from the
+A resolver annotated `-> Page[User]` may return a plain `Page`, such as one of the pages
+`DynamoModel.query` yields. The fields published, and the annotations used to encode them, come from the
 return annotation, not from the returned object.
 
 ## Streams (`pynamo.streams`)

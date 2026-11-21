@@ -52,10 +52,11 @@ DynamoModel.default_table(boto3.resource("dynamodb").Table("app"))
 class User(DynamoModel):
     """A user of the app."""
 
-    indexes = single_table_indexes(base=("USER#{user_id}", "USER"))
-
     user_id: str
     name: str
+
+    class Meta:
+        indexes = single_table_indexes(base=("USER#{user_id}", "USER"))
 
 
 # Served: the schema is generated from the resolvers' signatures
@@ -106,9 +107,7 @@ The three subpackages share models but don't depend on each other:
 
 ## Guides
 
-- [Models](models.md): defining models and their keys, and reading and writing them with `get`, `query`, `scan`, `put`, `update` and `delete`.
+- [Models](models.md): defining models and their keys, reading and writing them with `get`, `query`, `scan`, `put`, `update`, `delete` and `remove`, and querying several models at once with `DynamoCollection`.
 - [GraphQL API](api.md): registering resolvers, how Python types map to GraphQL, and deploying the router to AppSync.
 - [Streams](streams.md): registering change handlers, how a change finds its handler, and how failures and timeouts are retried.
 - [Considerations](CONSIDERATIONS.md): the limitations and quirks of each part.
-
-[`new_graphql_router.py`](new_graphql_router.py) is a complete AppSync API for users and their posts.

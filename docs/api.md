@@ -10,8 +10,6 @@ It needs the `graphql` extra, which installs `graphql-core`:
 pip install "aws-pynamo[graphql]"
 ```
 
-[`new_graphql_router.py`](new_graphql_router.py) is a complete example.
-
 ## Registering resolvers
 
 Decorate functions with `router.query()` or `router.mutation()` to make them fields of

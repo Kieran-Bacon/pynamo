@@ -6,45 +6,67 @@ The same classes are used by the rest of pynamo. [`pynamo.api`](api.md) publishe
 
 ## Defining a model
 
-Set `indexes` to the table's index definitions. Keys are `str.format` templates over
-the model's attributes. `single_table_indexes` names them using single-table
-conventions: `PK`/`SK`, `LSI<n>SK`, and `GSI<n>PK`/`GSI<n>SK`.
+Every model declares a nested `class Meta`, with nothing to import or inherit. Its settings are:
+
+- `indexes` (required): the table's index definitions, as a list. Keys are `str.format` templates over the model's attributes.
+- `table` (optional): the model's default table, see [Choosing the table](#choosing-the-table).
+
+`single_table_indexes` builds the index list using single-table naming conventions: `PK`/`SK`, `LSI<n>SK`, and `GSI<n>PK`/`GSI<n>SK`, numbered in the order given.
 
 ```python
 from pynamo.models import DynamoModel, single_table_indexes
 
 
 class Order(DynamoModel):
-    indexes = single_table_indexes(
-        base=("CUSTOMER#{customer_id}", "ORDER#{date}#{order_id}"),
-        local=["ORDER_BY_STATUS#{status}#{date}"],
-        global_indexes=[("ORDER#{order_id}", "ORDER")],
-    )
-
     customer_id: str
     order_id: str
     date: str
     status: str
     total: int
+
+    class Meta:
+        indexes = single_table_indexes(
+            base=("CUSTOMER#{customer_id}", "ORDER#{date}#{order_id}"),
+            local=["ORDER_BY_STATUS#{status}#{date}"],
+            global_indexes=[("ORDER#{order_id}", "ORDER")],
+        )
 ```
+
+Indexes can also be declared directly, to name the keys yourself. A `KeyPair` is a key attribute's name and its template:
+
+```python
+from pynamo.models import GlobalSecondaryIndex, KeyPair, LocalIndex, PrimaryIndex
+
+
+class Order(DynamoModel):
+    ...
+
+    class Meta:
+        indexes = [
+            PrimaryIndex(KeyPair("pk", "CUSTOMER#{customer_id}"), KeyPair("sk", "ORDER#{date}#{order_id}")),
+            LocalIndex("by_status", KeyPair("status_sk", "ORDER_BY_STATUS#{status}#{date}")),
+            GlobalSecondaryIndex("by_order", KeyPair("order_pk", "ORDER#{order_id}"), KeyPair("order_sk", "ORDER")),
+        ]
+```
+
+A `KeyPair` without a template, such as `KeyPair("order_id")`, is a column key: the model's own field of that name, stored as it is rather than generated. In `single_table_indexes`, a `None` template does the same, e.g. `base=(None, "ORDER")` makes `PK` the model's `PK` field. See [CONSIDERATIONS.md](CONSIDERATIONS.md) for how column keys differ.
 
 These rules are checked when the class is defined:
 
-- `indexes` must contain exactly one `PrimaryIndex`, and index names must be unique.
-- Template fields must name top-level attributes of the model, such as fields or
-  properties. Nested fields like `{owner.id}` are rejected, so expose a nested value as
-  a top-level property instead. Format specs like `{n:010d}` are allowed.
+- Every model declares its own `Meta`, including subclasses of another model, so a model never silently reuses another's keys. A model without one raises `TypeError`.
+- `Meta` may only set `indexes` and `table`, so a misspelt setting raises `TypeError`. `indexes` must be a list.
+- `indexes` must contain exactly one `PrimaryIndex`, and secondary index names must be unique.
+- Template fields must name top-level attributes of the model, such as fields or properties. Nested fields like `{owner.id}` are rejected, so expose a nested value as a top-level property instead. Format specs like `{n:010d}` are allowed.
+- A column key must be a field stored under its own name, not under a different alias.
 
 ## Choosing the table
 
 Every method takes a table, which is optional:
 
 - `get`, `remove`, `update`, `query` and `scan` take it as the keyword `table=`.
-- `put` and `delete` default to the table the model is attached to.
+- `put` and `delete` take it as their first argument, and default to the table the model is attached to.
 
-When no table is given, the default table set with `default_table` is used. A default
-applies to the class and its subclasses, unless a subclass sets its own, so setting it
-on `DynamoModel` covers every model:
+When no table is given, the model's default table is used. `Meta.table` sets a model's default when it's defined, and `default_table(table)` sets it later. A default applies to the class and its subclasses, unless a subclass sets its own, so setting it on `DynamoModel` covers every model without a `Meta.table`:
 
 ```python
 table = boto3.resource("dynamodb").Table("app")
@@ -53,9 +75,9 @@ DynamoModel.default_table(table)
 Order.get({"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"})  # From `table`
 ```
 
-The default table is separate from the table an instance is attached to. An instance
-uses a table it's given first, then its attached table, then the default. Writing an
-unattached model to the default table doesn't attach it.
+Calling `default_table()` with no table returns the default, and raises `ValueError` if there isn't one.
+
+The default table is separate from the table an instance is attached to. An instance uses a table it's given first, then its attached table, then the default. Writing an unattached model to the default table doesn't attach it.
 
 ## Reading items
 
@@ -88,12 +110,9 @@ The checkpoint records the item as stored in the attached table, and it decides 
 After writing to the attached table, `put` checkpoints the model, as that table now
 holds its state. Passing a different table is a one-off put: the model isn't attached
 to it, and its attachment and checkpoint are left as they are. Attaching a model to a
-different table, or detaching it, drops its checkpoint.
+different table, or detaching it, drops its checkpoint. Pass `allow_update=False` to always send a `put_item` of the whole item, even with a checkpoint.
 
-A model
-whose primary key has changed since its checkpoint can't be updated, because DynamoDB
-can't change an item's key, so `put` raises `ValueError`. Detach it first to write it as
-a new item; the old item is left in place.
+A model whose primary key has changed since its checkpoint can't be updated, because DynamoDB can't change an item's key, so `put` raises `ValueError`. Detach it first to write it as a new item; the old item is left in place.
 
 ```python
 order = Order.get({"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"})
@@ -116,13 +135,14 @@ stays attached. Deleting from a different table leaves the checkpoint as it is.
 the primary key's attributes, as for `get`, and then the changes:
 
 ```python
-from pynamo.models import Increment
+from pynamo.models.updates import Increment
 
 Account.update({"account_id": "a1"}, {"plan": "pro"})
 Account.update({"account_id": "a1"}, {"identity": {"username": "new"}})
 Account.update({"account_id": "a1"}, {"likes": Increment(1)})
 ```
 
+- **`changes` can't be empty**, otherwise `update` raises `ValueError`.
 - **The primary key can't be changed.** A change to an attribute the primary key is
   built from raises `ValueError`; delete the item and put it under its new key instead.
 - **Values are validated before anything is sent.** Each one is checked with its field's
@@ -148,30 +168,52 @@ item without needing its model. It takes the same `key` mapping as `get`.
 
 ### `query`
 
-`query` builds the key condition from attribute values, and turns any remaining values
-into filters. It yields one `Page` per DynamoDB request:
+`query` builds the key condition from attribute values, and turns any remaining values into filters. A value is either a plain value, which matches by equality, or a comparator from `pynamo.models.conditions`. It yields one `Page` per DynamoDB request:
 
 ```python
-from pynamo.models import between
+from pynamo.models.conditions import Between
 
-for page in Order.query({"customer_id": "c1", "date": between("2024-01", "2024-03")}):
+for page in Order.query({"customer_id": "c1", "date": Between("2024-01", "2024-03")}):
     for order in page.items:
         ...
     for invalid in page.errors:
         ...
 ```
 
-- Every attribute in the index's partition key template must have a plain value.
-  Comparators are not allowed there.
-- Sort key values fix the key in template order. The first missing attribute, or the
-  first attribute given a comparator, ends the key condition, and later values become
-  filters.
-- Pass `index_name` to query a secondary index.
+The key condition is built like this:
+
+- **Partition key:** every attribute in the index's partition key template needs a plain value. A missing one, or a comparator, raises `ValueError`.
+- **Sort key:** values are taken in template order, up to the first attribute without one.
+  - A plain value for every attribute matches the whole key exactly, e.g. `SK = 'ORDER#2024-01-01#o1'`.
+  - Plain values for only the first attributes match the keys that begin with them, e.g. `begins_with(SK, 'ORDER#2024-01-01#')`. With no values, the key matches on the text before its first attribute, `begins_with(SK, 'ORDER#')`, so other item types in the partition aren't read.
+  - The first comparator ends the key condition. If it can narrow a key, it's applied to the key text, together with the plain values before it. If it's filter-only, it becomes a filter.
+- **Everything else is a filter:** sort key values after the key condition ends, and every attribute that isn't part of the key. A name the model doesn't have raises `TypeError`.
+
+The comparators are:
+
+| Comparator | Matches | On the sort key |
+| --- | --- | --- |
+| `Equal(value)` | equal to `value`, as a plain value does | key condition |
+| `Between(low, high)` | from `low` to `high`, including both | key condition |
+| `BeginsWith(prefix)` | text starting with `prefix` | key condition |
+| `GreaterThan(value)`, `GreaterThanOrEqual(value)` | above `value` | key condition |
+| `LessThan(value)`, `LessThanOrEqual(value)` | below `value` | key condition |
+| `NotEqual(value)` | not equal to `value` | filter |
+| `In(values)` | one of a tuple of `values` | filter |
+| `Contains(value)` | a string containing, or a set or list holding, `value` | filter |
+| `Exists()`, `NotExists()` | the attribute is present, or missing | filter |
+
+On the sort key, a comparator compares key text, not attribute values, so `9` sorts after `10`. A comparator on an attribute in the middle of a key, like `date` in `ORDER#{date}#{order_id}`, matches every key with a matching value, whatever follows it. See [CONSIDERATIONS.md](CONSIDERATIONS.md) for how ranges are built.
+
+`query` also takes:
+
+- `index_name`: a secondary index to query. A local index uses the table's partition key.
+- `table`, `limit`, `consistent_read` and `start_token`, see [Pages](#pages).
+- `scan_forward`: False returns items in descending sort key order.
 
 ### `scan`
 
-`scan` takes the same `values` as `query`, but every value becomes a filter. `values`
-is optional.
+`scan` takes the same `values` as `query`, but every value becomes a filter, and `values` is optional. Items are also filtered to the model's own by the text its primary keys start with (see [Considerations](#scans-match-item-types-by-key-prefix)). It takes the same arguments as `query`, except `scan_forward`; `index_name` scans a secondary index.
 
 ```python
 for page in Order.scan({"status": "open"}):
