@@ -5,17 +5,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from tidal.models import (
-    DynamoModel,
-    GlobalSecondaryIndex,
-    LocalSecondaryIndex,
-    PrimaryIndex,
-    gte,
-    single_table_indexes,
-)
+from tidal.models import DynamoModel, KeyPair, LocalIndex, single_table_indexes
+from tidal.models.conditions import GreaterThanOrEqual
 
 ORDER_KEY = {"PK": "CUSTOMER#c1", "SK": "ORDER#2024-01-01#o1"}
 """The primary key of the item `order_item` returns."""
+
+ORDER_KEY_VALUES = {"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"}
+"""The attribute values `ORDER_KEY` is built from."""
 
 
 @pytest.fixture
@@ -28,22 +25,51 @@ def order(order_model, order_item):
 def read_order(order_model, order_item, table):
     """Read an order from the table, so it's attached and checkpointed."""
     table.get_item.return_value = {"Item": order_item()}
-    return order_model.get(table, customer_id="c1", date="2024-01-01", order_id="o1")
+    return order_model.get(ORDER_KEY_VALUES, table=table)
 
 
-def test_subclasses_must_include_a_primary_index():
-    with pytest.raises(ValueError, match="must include a PrimaryIndex"):
+# Meta
+
+
+def test_subclasses_must_declare_their_own_meta():
+    with pytest.raises(TypeError, match="must declare its own `class Meta`"):
+
+        class ModelWithoutMeta(DynamoModel):
+            name: str
+
+
+def test_meta_must_include_a_primary_index():
+    with pytest.raises(ValueError, match="exactly one PrimaryIndex"):
 
         class ModelWithoutPrimaryIndex(DynamoModel):
-            indexes: ClassVar[
-                list[PrimaryIndex | LocalSecondaryIndex | GlobalSecondaryIndex]
-            ] = [
-                LocalSecondaryIndex(
-                    index_name="ByName", sk_name="LSI1SK", sk_template="USER#{name}"
-                )
-            ]
-
             name: str
+
+            class Meta:
+                indexes: ClassVar[list] = [
+                    LocalIndex("LSI1", KeyPair("LSI1SK", "USER#{name}"))
+                ]
+
+
+def test_meta_rejects_unknown_settings():
+    with pytest.raises(TypeError, match="unknown settings: tabel"):
+
+        class ModelWithTypo(DynamoModel):
+            name: str
+
+            class Meta:
+                indexes = single_table_indexes(base=("USER#{name}", "USER"))
+                tabel = None
+
+
+def test_meta_table_is_the_default_table():
+    class Setting(DynamoModel):
+        name: str
+
+        class Meta:
+            indexes = single_table_indexes(base=("SETTING#{name}", "SETTING"))
+            table = Mock()
+
+    assert Setting.default_table() is Setting._meta.table
 
 
 # Query
@@ -58,15 +84,18 @@ def test_query_rejects_unknown_attributes_and_indexes(order_model, table):
 
 def test_query_attributes_can_share_names_with_parameters(table, render):
     class Setting(DynamoModel):
-        indexes = single_table_indexes(base=("TABLE#{table}", "LIMIT#{limit}"))
-
         table: str
         limit: int
         index_name: str
 
+        class Meta:
+            indexes = single_table_indexes(base=("TABLE#{table}", "LIMIT#{limit}"))
+
     next(
         Setting.query(
-            {"table": "t1", "limit": gte(5), "index_name": "i1"}, table=table, limit=10
+            {"table": "t1", "limit": GreaterThanOrEqual(5), "index_name": "i1"},
+            table=table,
+            limit=10,
         )
     )
     request = table.query.call_args.kwargs
@@ -165,8 +194,6 @@ def test_put_defaults_to_the_attached_table(order_model, order_item, order, tabl
 
 def test_put_key_templates_can_use_properties(table):
     class Event(DynamoModel):
-        indexes = single_table_indexes(base=("SOURCE#{source}", "EVENT#{day}"))
-
         source: str
         at: str
 
@@ -174,6 +201,9 @@ def test_put_key_templates_can_use_properties(table):
         def day(self) -> str:
             """The date part of `at`."""
             return self.at[:10]
+
+        class Meta:
+            indexes = single_table_indexes(base=("SOURCE#{source}", "EVENT#{day}"))
 
     Event(source="s1", at="2024-01-01T09:00").put(table)
     item = table.put_item.call_args.kwargs["Item"]
@@ -184,7 +214,7 @@ def test_get_reads_back_what_put_wrote(order_model, order, table):
     order.attach(table).put()
     table.get_item.return_value = {"Item": table.put_item.call_args.kwargs["Item"]}
 
-    read = order_model.get(table, customer_id="c1", date="2024-01-01", order_id="o1")
+    read = order_model.get(ORDER_KEY_VALUES, table=table)
     assert read == order
 
 
@@ -216,6 +246,17 @@ def test_put_on_a_checkpointed_model_only_updates_what_changed(order, table, ren
     table.update_item.assert_called_once()
 
 
+def test_put_removes_attributes_no_longer_present(order, table):
+    order.attach(table).put()
+    order._checkpoint = (order._checkpoint or {}) | {"legacy": "x"}
+    order.put()
+
+    arguments = table.update_item.call_args.kwargs
+    assert arguments["UpdateExpression"] == "REMOVE #u0"
+    assert arguments["ExpressionAttributeNames"] == {"#u0": "legacy"}
+    assert "ExpressionAttributeValues" not in arguments
+
+
 def test_put_on_a_detached_model_writes_it_whole(order, table):
     order.attach(table).put()
     order.attach(None)
@@ -229,6 +270,27 @@ def test_put_rejects_a_changed_primary_key(order, table):
     order.order_id = "o2"
     with pytest.raises(ValueError, match="primary key has changed"):
         order.put()
+
+
+# Get
+
+
+def test_get_builds_the_key_from_the_key_values(order_model, order_item, table):
+    table.get_item.return_value = {"Item": order_item()}
+    order_model.get(ORDER_KEY_VALUES, table=table)
+    table.get_item.assert_called_once_with(Key=ORDER_KEY)
+
+
+def test_get_rejects_attributes_the_key_is_not_built_from(order_model, table):
+    with pytest.raises(ValueError, match="not built from the attribute.*status"):
+        order_model.get(ORDER_KEY_VALUES | {"status": "open"}, table=table)
+    table.get_item.assert_not_called()
+
+
+def test_get_reports_a_missing_item(order_model, table):
+    table.get_item.return_value = {}
+    with pytest.raises(KeyError, match="Could not find entry"):
+        order_model.get(ORDER_KEY_VALUES, table=table)
 
 
 # Delete
@@ -268,28 +330,29 @@ def test_delete_requires_a_table(order):
 
 
 def test_remove_deletes_by_the_key_built_from_the_values(order_model, table):
-    order_model.remove(table, customer_id="c1", date="2024-01-01", order_id="o1")
+    order_model.remove(ORDER_KEY_VALUES, table=table)
     table.delete_item.assert_called_once_with(Key=ORDER_KEY)
 
 
-def test_get_and_remove_accept_a_key_attribute_named_table(table):
+def test_key_attributes_can_share_names_with_parameters(table):
     class Setting(DynamoModel):
-        indexes = single_table_indexes(base=("TABLE#{table}", "SETTING"))
-
         table: str
+
+        class Meta:
+            indexes = single_table_indexes(base=("TABLE#{table}", "SETTING"))
 
     table.get_item.return_value = {"Item": {"table": "t1"}}
     key = {"PK": "TABLE#t1", "SK": "SETTING"}
 
-    assert Setting.get(table, table="t1").table == "t1"
+    assert Setting.get({"table": "t1"}, table=table).table == "t1"
     table.get_item.assert_called_once_with(Key=key)
-    Setting.remove(table, table="t1")
+    Setting.remove({"table": "t1"}, table=table)
     table.delete_item.assert_called_once_with(Key=key)
 
 
 def test_remove_requires_the_key_attributes(order_model, table):
-    with pytest.raises(KeyError):
-        order_model.remove(table, customer_id="c1", date="2024-01-01")
+    with pytest.raises(ValueError, match="Not all required attributes"):
+        order_model.remove({"customer_id": "c1", "date": "2024-01-01"}, table=table)
     table.delete_item.assert_not_called()
 
 
@@ -351,12 +414,16 @@ def models(table):
     """A base model and its subclass, which inherit default tables."""
 
     class Base(DynamoModel):
-        indexes = single_table_indexes(base=("ITEM#{item_id}", "ITEM"))
-
         item_id: str
 
+        class Meta:
+            indexes = single_table_indexes(base=("ITEM#{item_id}", "ITEM"))
+
     class Child(Base):
-        pass
+        # Each model declares its own Meta; ty types a nested class as that exact
+        # class, so it reports any redefinition in a subclass
+        class Meta:  # ty: ignore[invalid-attribute-override]
+            indexes = single_table_indexes(base=("ITEM#{item_id}", "ITEM"))
 
     table.get_item.return_value = {"Item": {"item_id": "i1"}}
     return Base, Child
@@ -368,7 +435,7 @@ def test_subclasses_inherit_a_parents_default_table(models, table):
     assert child.default_table() is table
 
     # Items read from the default table are attached to it
-    item = child.get(item_id="i1")
+    item = child.get({"item_id": "i1"})
     table.get_item.assert_called_once()
     assert item._table is table
 
@@ -385,7 +452,7 @@ def test_a_subclass_default_table_does_not_change_its_parent(models, table):
 def test_a_missing_default_table_is_reported(models):
     _, child = models
     with pytest.raises(ValueError, match="Child has no table"):
-        child.get(item_id="i1")
+        child.get({"item_id": "i1"})
 
 
 def test_attached_and_given_tables_take_precedence_over_the_default(models, table):

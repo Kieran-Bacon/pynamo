@@ -65,13 +65,13 @@ router = Router()
 @router.query()
 def get_user(user_id: str) -> User:
     """Get a user by ID."""
-    return User.get(user_id=user_id)
+    return User.get({"user_id": user_id})
 
 
 @router.mutation()
 def rename_user(user_id: str, name: str) -> User:
     """Change a user's name."""
-    return User.update(user_id=user_id, name=name)
+    return User.update({"user_id": user_id}, {"name": name})
 
 
 # Reacted to: each change arrives as the item before and after it

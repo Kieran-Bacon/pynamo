@@ -1,77 +1,29 @@
 """Pydantic models stored in DynamoDB.
 
-`indexes` defines key layouts, `conditions` the query comparators, `updates` the
-update actions, and `base` the `DynamoModel` class. The public API is re-exported here.
+`base` holds the `DynamoModel` class, `meta` the `Meta` settings it reads, and `indexes`
+the key layouts, which are re-exported here as every model declares them. Query
+comparators and update actions are used from their own modules, `conditions` and
+`updates`, e.g. `from tidal.models.conditions import Between`.
 """
 
 from .base import DynamoModel, InvalidItem, Page
-from .conditions import (
-    BeginsWith,
-    Between,
-    Comparator,
-    Contains,
-    Exists,
-    GreaterThan,
-    GreaterThanOrEqual,
-    In,
-    LessThan,
-    LessThanOrEqual,
-    NotEqual,
-    NotExists,
-    begins_with,
-    between,
-    contains,
-    exists,
-    gt,
-    gte,
-    is_in,
-    lt,
-    lte,
-    ne,
-    not_exists,
-)
 from .indexes import (
     GlobalSecondaryIndex,
     Index,
-    LocalSecondaryIndex,
+    KeyPair,
+    LocalIndex,
     PrimaryIndex,
     single_table_indexes,
 )
-from .updates import Increment, UpdateAction, increment
 
 __all__ = [
-    "BeginsWith",
-    "Between",
-    "Comparator",
-    "Contains",
     "DynamoModel",
-    "Exists",
     "GlobalSecondaryIndex",
-    "GreaterThan",
-    "GreaterThanOrEqual",
-    "In",
-    "Increment",
     "Index",
     "InvalidItem",
-    "LessThan",
-    "LessThanOrEqual",
-    "LocalSecondaryIndex",
-    "NotEqual",
-    "NotExists",
+    "KeyPair",
+    "LocalIndex",
     "Page",
     "PrimaryIndex",
-    "UpdateAction",
-    "begins_with",
-    "between",
-    "contains",
-    "exists",
-    "gt",
-    "gte",
-    "increment",
-    "is_in",
-    "lt",
-    "lte",
-    "ne",
-    "not_exists",
     "single_table_indexes",
 ]

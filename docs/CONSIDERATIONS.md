@@ -5,6 +5,10 @@ package documentation.
 
 ## Models (`tidal.models`)
 
+### Every model declares its own `Meta`
+
+A model's `Meta` must declare its own `indexes`, so a subclass of a model never silently reuses its parent's keys. Defining one without its own `Meta` raises `TypeError`. The checked settings are kept on the model as `_meta`, and the declared `Meta` is left as a plain class. Type checkers such as ty type a nested class as that exact class, so redeclaring `Meta` in a subclass of a model is reported as an invalid override. That needs a `# ty: ignore[invalid-attribute-override]` on the subclass's `Meta`. Subclassing `DynamoModel` itself isn't affected.
+
 ### The default table is inherited by class attribute lookup
 
 `DynamoModel.default_table(table)` stores the table on the class it's called on.
@@ -41,16 +45,46 @@ plain value: either one passed to `update` or a primary key value. An update tha
 touches a key attribute raises `ValueError` before anything is sent in these cases:
 
 - another attribute of that key isn't given;
-- the attribute is given a nested mapping or an `increment`;
+- the attribute is given a nested mapping or an `Increment`;
 - the key is built from a property.
 
 Use `put` for these changes.
 
-### `increment` isn't validated against the field
+### `Increment` isn't validated against the field
 
-`increment` checks that the amount is an `int` or `Decimal`, but DynamoDB computes the
+`Increment` checks that the amount is an `int` or `Decimal`, but DynamoDB computes the
 result. The field's type and validators, such as `ge=0`, are only checked when the
 returned item is validated, after the write.
+
+### Keys without a template are the model's own fields
+
+A key with no template, such as `PrimaryIndex(pk_name="player_id", sk_name="points")`, is the model field with the key's name. It's stored once, by the normal field dump, and keeps its type, so a number key is stored as a number. Some consequences:
+
+- The field must be stored under its own name, so a field with a different alias can't be a key. Defining the model raises `ValueError` otherwise.
+- Values passed to `get`, `remove`, `update` and `query` for the key are used as they are, without being validated as the field. A key that holds a number needs a number: `points="5"` won't match an item stored with `points=5`.
+- `between`, `begins_with`, `gt`, `gte`, `lt` and `lte` on a column sort key are applied to the key directly. The other comparators are filters.
+- `scan` and `DynamoCollection` have no key prefix to match on, so a model whose primary keys are both column keys matches every item in its table.
+
+### Sort key ranges compare key text, not attribute values
+
+A comparator on a sort key attribute becomes a range on the key text, e.g. `Between("2024-01", "2024-03")` on `date` in `ORDER#{date}#{order_id}` becomes `BETWEEN 'ORDER#2024-01#' AND 'ORDER#2024-03#\U0010ffff'`. Bounds include both ends, as DynamoDB's `BETWEEN` does. When the attribute isn't the last in the key, the range reaches every key that continues past a matching value, by appending the highest code point. One-sided ranges (`GreaterThan`, `LessThan`, ...) are capped by the key text before the attribute, here `ORDER#`, so they don't read other item types in the partition. Some consequences:
+
+- Key text sorts by character, so values only compare as expected when they sort that way as text: zero-padded numbers and ISO dates do, `9` and `10` don't. Use a format spec, such as `{n:010d}`, for numbers.
+- A value containing a character that sorts below the separator after it (e.g. `!` before `#`) can fall inside a range it doesn't match. No filter is added to remove it.
+- `LessThan` ends just below the bound by lowering its last character and appending the highest code point, so a key continuing with that code point would be missed. Real keys don't contain it.
+- A key that starts with an attribute, such as `{date}#...`, has no text to cap a one-sided range, so the range runs to the end of the partition.
+
+### `DynamoCollection` matches items to models by key prefix
+
+A `DynamoCollection` decides which model an item is by the literal text at the start of each model's primary key templates. Models whose prefixes overlap, such as `POST#{post_id}` and `POST#DRAFT#{draft_id}`, can't be in the same collection, even when the full templates could tell the items apart. A model whose primary key templates both start with a field has no prefixes, so it overlaps every other model. A type attribute stored on each item would lift this limit, at the cost of changing what `put` writes and not working for items already stored.
+
+### `DynamoCollection.query` only takes partition key values
+
+Each model builds its own partition key from the query's values, and the keys must match. Models whose templates use different attribute names, such as `USER#{user_id}` and `USER#{owner_id}`, need a value for each name. Sort key conditions and filters aren't supported, as sort key templates and attributes differ between models. Filter the returned models in Python instead.
+
+### `DynamoCollection` filters on the partition key prefix too
+
+The item filter checks every model's partition and sort key prefixes, even though the key condition already fixes the partition key. The partition key prefix check is redundant, but it keeps the filter the same as the one each model's `scan` uses.
 
 ## GraphQL API (`tidal.api`)
 

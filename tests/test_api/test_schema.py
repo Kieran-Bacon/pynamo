@@ -18,15 +18,17 @@ from tidal.models import DynamoModel, Page, single_table_indexes
 class Post(DynamoModel):
     """A user's post."""
 
-    indexes = single_table_indexes(base=("USER#{user_id}", "POST#{post_id}"))
-
     user_id: str
     post_id: str
     content: str
 
+    class Meta:
+        indexes = single_table_indexes(base=("USER#{user_id}", "POST#{post_id}"))
+
 
 class User(DynamoModel):
-    indexes = single_table_indexes(base=("USER#{user_id}", "USER"))
+    class Meta:
+        indexes = single_table_indexes(base=("USER#{user_id}", "USER"))
 
     user_id: str
     name: str = pydantic.Field(description="Display name")

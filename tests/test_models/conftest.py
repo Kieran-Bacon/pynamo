@@ -26,17 +26,18 @@ def order_model() -> type[DynamoModel]:
     class Order(DynamoModel):
         """An order with a local index on its status and a global index on its ID."""
 
-        indexes = single_table_indexes(
-            base=("CUSTOMER#{customer_id}", "ORDER#{date}#{order_id}"),
-            local=["ORDER_BY_STATUS#{status}#{date}"],
-            global_indexes=[("ORDER#{order_id}", "ORDER")],
-        )
-
         customer_id: str
         order_id: str
         date: str
         status: str
         total: int
+
+        class Meta:
+            indexes = single_table_indexes(
+                base=("CUSTOMER#{customer_id}", "ORDER#{date}#{order_id}"),
+                local=["ORDER_BY_STATUS#{status}#{date}"],
+                global_indexes=[("ORDER#{order_id}", "ORDER")],
+            )
 
     return Order
 

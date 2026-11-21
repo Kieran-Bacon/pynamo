@@ -39,9 +39,7 @@ These rules are checked when the class is defined:
 
 Every method takes a table, which is optional:
 
-- `get`, `update` and `remove` take it as the first positional argument, so a key
-  attribute can also be called `table`.
-- `query` and `scan` take it as the keyword `table=`.
+- `get`, `remove`, `update`, `query` and `scan` take it as the keyword `table=`.
 - `put` and `delete` default to the table the model is attached to.
 
 When no table is given, the default table set with `default_table` is used. A default
@@ -52,7 +50,7 @@ on `DynamoModel` covers every model:
 table = boto3.resource("dynamodb").Table("app")
 DynamoModel.default_table(table)
 
-Order.get(customer_id="c1", date="2024-01-01", order_id="o1")  # Reads from `table`
+Order.get({"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"})  # From `table`
 ```
 
 The default table is separate from the table an instance is attached to. An instance
@@ -63,9 +61,11 @@ unattached model to the default table doesn't attach it.
 
 ### `get`
 
-`Order.get(table, customer_id="c1", date="2024-01-01", order_id="o1")` builds the
-primary key from the values and returns the item. The model is attached to the table
-and checkpointed.
+`Order.get({"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"}, table=table)`
+builds the primary key from the `key` mapping and returns the item. The mapping must hold
+exactly the attributes the primary key is built from: a missing one raises `ValueError`
+(`KeyError` for a column key), and so does one the key doesn't use. The model is
+attached to the table and checkpointed.
 
 ### `put`
 
@@ -96,7 +96,7 @@ can't change an item's key, so `put` raises `ValueError`. Detach it first to wri
 a new item; the old item is left in place.
 
 ```python
-order = Order.get(table, customer_id="c1", date="2024-01-01", order_id="o1")
+order = Order.get({"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"})
 order.status = "shipped"
 order.put()  # Updates status and the LSI1SK key built from it
 ```
@@ -113,16 +113,18 @@ stays attached. Deleting from a different table leaves the checkpoint as it is.
 ### `update`
 
 `update` changes an existing item by its primary key, without needing its model. Pass
-the primary key attributes and the attributes to change:
+the primary key's attributes, as for `get`, and then the changes:
 
 ```python
-from tidal.models import increment
+from tidal.models import Increment
 
-Account.update(account_id="a1", plan="pro")
-Account.update(account_id="a1", identity={"username": "new"})
-Account.update(account_id="a1", likes=increment(1))
+Account.update({"account_id": "a1"}, {"plan": "pro"})
+Account.update({"account_id": "a1"}, {"identity": {"username": "new"}})
+Account.update({"account_id": "a1"}, {"likes": Increment(1)})
 ```
 
+- **The primary key can't be changed.** A change to an attribute the primary key is
+  built from raises `ValueError`; delete the item and put it under its new key instead.
 - **Values are validated before anything is sent.** Each one is checked with its field's
   type and field validators. Unknown fields raise `TypeError`, and invalid values raise
   `pydantic.ValidationError`.
@@ -130,7 +132,7 @@ Account.update(account_id="a1", likes=increment(1))
   any depth, and the other keys in the stored map are left alone. Pass `None` to clear a
   key. Pass a model instance to replace the whole attribute.
 - **Any other value replaces the attribute**, including lists and dicts.
-- **`increment(n)` adds `n` to a number in DynamoDB**, starting from 0 if the attribute
+- **`Increment(n)` adds `n` to a number in DynamoDB**, starting from 0 if the attribute
   is missing. Use a negative `n` to decrement.
 - **Index keys are rewritten.** Secondary index keys built from an updated attribute are
   regenerated, which needs a plain value for every attribute in that key.
@@ -141,9 +143,8 @@ It returns the updated item, attached and checkpointed. See
 
 ### `remove`
 
-`Order.remove(table, customer_id="c1", date="2024-01-01", order_id="o1")` deletes an
-item without needing its model. Like `get`, it builds the primary key from the keyword
-arguments, and a missing key attribute raises `KeyError`.
+`Order.remove({"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"})` deletes an
+item without needing its model. It takes the same `key` mapping as `get`.
 
 ### `query`
 
@@ -176,6 +177,28 @@ is optional.
 for page in Order.scan({"status": "open"}):
     ...
 ```
+
+### Querying several models at once
+
+In a single-table design, different models often share a partition, such as a user's profile and their posts under `USER#{user_id}`. A `DynamoCollection` queries that partition once and returns each item as the model it belongs to:
+
+```python
+from tidal.models.collection import DynamoCollection
+
+user_models = DynamoCollection(User, Post)
+
+for page in user_models.query({"user_id": "u1"}):
+    for user in page[User]:
+        ...
+    for post in page[Post]:
+        ...
+```
+
+Each page is a `CollectionPage`. Indexing it with a model gives that model's items as a list, typed as that model, in the order DynamoDB returned them. Every model in the collection has a list, which is empty when the page has none of its items, and a model that isn't in the collection raises `KeyError`. The page also has `items`, every model in the order returned, and the same `errors` and `token` as a model's pages.
+
+`query` takes the same `index_name`, `table`, `limit`, `scan_forward`, `consistent_read` and `start_token` arguments as `DynamoModel.query`. Without a `table`, every model must have the same default table. For now, `values` can only hold the partition key's attributes, and every model must build the same partition key from them: the same key attribute and the same key text. Sort key conditions and filters differ between models, so they aren't supported yet.
+
+Each item is matched to a model by the literal text its primary keys start with, e.g. `PROFILE` for `User` and `POST#` for `Post`. The query filters out items of models that aren't in the collection. The collection raises when it's created if two models' prefixes overlap, so an item could belong to either, or if the models store their primary keys under different attributes.
 
 ### Pages
 

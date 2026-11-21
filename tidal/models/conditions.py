@@ -1,60 +1,126 @@
-"""Query comparators, and the key conditions and filters built from them.
+"""Query comparators, and the filters and key conditions they build.
 
 Comparators are passed to `DynamoModel.query` in place of plain (equality) values, e.g.
-`Order.query(table, {"customer_id": "c1", "date": between("2024-01", "2024-03")})`.
+`Order.query({"customer_id": "c1", "date": Between("2024-01", "2024-03")})`.
 
-DynamoDB allows only an equality on the partition key and one condition on the sort key,
-so any value the key conditions don't fully cover is applied as a filter instead.
-`between`, `begins_with`, `gt`, `gte`, `lt` and `lte` can narrow the sort key; `ne`,
-`is_in`, `contains`, `exists` and `not_exists` are filter-only.
+Each comparator builds a filter on an attribute with `filter`, and those that can narrow
+a key build a key condition with `create_key_condition_expression`. `Equal`, `Between`,
+`BeginsWith`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan` and `LessThanOrEqual` can
+narrow a key; `NotEqual`, `In`, `Contains`, `Exists` and `NotExists` are filter-only.
 """
 
 import dataclasses
-import functools
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 from boto3.dynamodb.conditions import Attr, ConditionBase, Key
 
-from .indexes import _formatter, _template_fields
+from .indexes import KeyPair
 
-# Highest code point: `prefix + _MAX_CHAR` sorts after every key starting with `prefix`
+# Highest code point: `text + _MAX_CHAR` sorts after every key starting with `text`
 _MAX_CHAR = "\U0010ffff"
+
+# Lowest code point: `text + _MIN_CHAR` is the first key after `text`
+_MIN_CHAR = "\x00"
+
+
+def _before(text: str) -> str:
+    """Get the highest key below `text`, to end a range that excludes `text`.
+
+    Keys starting with that key and continuing with `_MAX_CHAR` are missed, which
+    real keys don't contain.
+    """
+    # Every key below `text` + `_MIN_CHAR` is at most `text` without it
+    if text.endswith(_MIN_CHAR):
+        return text[:-1]
+
+    # Lower the last character, skipping the surrogates DynamoDB can't store
+    code = ord(text[-1]) - 1
+    if 0xD800 <= code <= 0xDFFF:
+        code = 0xD7FF
+    return text[:-1] + chr(code) + _MAX_CHAR
 
 
 class Comparator:
-    """A condition on a single attribute, used when querying a `DynamoModel`."""
+    """A condition on a single attribute, used when querying a `DynamoModel`.
+
+    A comparator on an attribute in the middle of a key (e.g. `date` in
+    `ORDER#{date}#{order_id}`) matches every key with a matching value, whatever
+    follows it. One-sided ranges are capped by the key text before the attribute
+    (e.g. `ORDER#`), so they don't read other item types.
+
+    Attributes:
+        narrows_key: Whether the comparator can build a key condition
+    """
+
+    narrows_key: ClassVar[bool] = False
+
+    def _format(self, key: KeyPair, values: Mapping[str, Any], operand: Any) -> str:
+        """Format `key` from `values`, with `operand` in place of this comparator."""
+        substituted = {
+            name: operand if value is self else value for name, value in values.items()
+        }
+        return key.format(substituted, partial=True)
+
+    def _placement(self, key: KeyPair, values: Mapping[str, Any]) -> tuple[str, bool]:
+        """Get the key text before this comparator's attribute, and whether it ends.
+
+        Returns:
+            The text before the attribute, empty for a column key, and whether the
+            attribute is the key's last, so its formatted value completes the key
+        """
+        if key.is_column:
+            return "", True
+        attribute = next(name for name, value in values.items() if value is self)
+        before = {name: value for name, value in values.items() if value is not self}
+        return key.format(before, partial=True), attribute == key.attributes[-1]
 
     def filter(self, attr: Attr) -> ConditionBase:
         """Get the condition on the raw attribute, for a filter expression."""
         raise NotImplementedError
 
-    def key_condition(
-        self,
-        key: Key,
-        prefix: str,
-        fmt: Callable[[Any], str],
-        is_last: bool,
-    ) -> tuple[ConditionBase | None, bool]:
-        """Get the condition on a sort key containing this comparator's attribute.
+    def create_key_condition_expression(
+        self, key: KeyPair, values: Mapping[str, Any]
+    ) -> ConditionBase:
+        """Get the condition on `key`, formatted from `values`.
 
         Args:
-            key: The sort key the condition is on
-            prefix: The formatted sort key text before this attribute
-            fmt: Formats a value of this attribute as it appears in the key
-            is_last: Whether this attribute ends the sort key template
+            key: The key the condition is on
+            values: The values the key is formatted from, holding this comparator in
+                place of its operand
 
-        Returns:
-            The key condition, or None if the comparator is filter-only, and whether it
-            is exact. An inexact condition matches a superset, so must also be filtered.
+        Raises:
+            NotImplementedError: If the comparator is filter-only
         """
-        # By default a comparator is filter-only
-        return None, False
+        raise NotImplementedError(f"{type(self).__name__} can't build a key condition")
+
+
+@dataclasses.dataclass(frozen=True)
+class Equal(Comparator):
+    """The attribute is equal to `value`, as a plain value is."""
+
+    narrows_key = True
+
+    value: Any
+
+    def filter(self, attr: Attr) -> ConditionBase:
+        """Get `attr = value`."""
+        return attr.eq(self.value)
+
+    def create_key_condition_expression(self, key, values):
+        """Get `key = value`, or `begins_with` it when more of the key follows."""
+        _, is_last = self._placement(key, values)
+        value = self._format(key, values, self.value)
+        if is_last:
+            return Key(key.name).eq(value)
+        return Key(key.name).begins_with(value)
 
 
 @dataclasses.dataclass(frozen=True)
 class Between(Comparator):
     """The attribute is between `low` and `high`, inclusive."""
+
+    narrows_key = True
 
     low: Any
     high: Any
@@ -63,19 +129,23 @@ class Between(Comparator):
         """Get `attr BETWEEN low AND high`."""
         return attr.between(self.low, self.high)
 
-    def key_condition(self, key, prefix, fmt, is_last):
-        """Get a `BETWEEN` on the key, exact only if the attribute ends the key."""
-        low = prefix + fmt(self.low)
-        high = prefix + fmt(self.high)
+    def create_key_condition_expression(self, key, values):
+        """Get `key BETWEEN low AND high`, with each bound formatted into the key."""
+        _, is_last = self._placement(key, values)
+        low = self._format(key, values, self.low)
+        high = self._format(key, values, self.high)
+
+        # Include the keys that continue past the upper bound's value
         if not is_last:
-            # Include the rest of the key that follows the upper bound
             high += _MAX_CHAR
-        return key.between(low, high), is_last
+        return Key(key.name).between(low, high)
 
 
 @dataclasses.dataclass(frozen=True)
 class BeginsWith(Comparator):
     """The attribute starts with `prefix`."""
+
+    narrows_key = True
 
     prefix: str
 
@@ -83,18 +153,16 @@ class BeginsWith(Comparator):
         """Get `begins_with(attr, prefix)`."""
         return attr.begins_with(self.prefix)
 
-    def key_condition(self, key, prefix, fmt, is_last):
-        """Get an exact `begins_with` on the key, using the prefix unformatted."""
-        value = prefix + str(self.prefix)
-        if not value:
-            # DynamoDB rejects an empty begins_with
-            return None, False
-        return key.begins_with(value), True
+    def create_key_condition_expression(self, key, values):
+        """Get `begins_with(key, prefix)`, with the prefix formatted into the key."""
+        return Key(key.name).begins_with(self._format(key, values, self.prefix))
 
 
 @dataclasses.dataclass(frozen=True)
 class GreaterThan(Comparator):
     """The attribute is greater than `value`."""
+
+    narrows_key = True
 
     value: Any
 
@@ -102,21 +170,27 @@ class GreaterThan(Comparator):
         """Get `attr > value`."""
         return attr.gt(self.value)
 
-    def key_condition(self, key, prefix, fmt, is_last):
-        """Get a lower bound on the key, exact only with no prefix at the key's end."""
-        low = prefix + fmt(self.value)
+    def create_key_condition_expression(self, key, values):
+        """Get the keys after every key for `value`, capped by the text before it."""
+        prefix, is_last = self._placement(key, values)
+        value = self._format(key, values, self.value)
+
+        # With nothing to cap it, a value that ends the key is its own bound
+        if is_last and not prefix:
+            return Key(key.name).gt(value)
+
+        # Skip the keys that continue past the value, or only the value at the end
+        low = value + (_MIN_CHAR if is_last else _MAX_CHAR)
         if prefix:
-            # Stay within the prefix; the filter removes values equal to `low`
-            return key.between(low, prefix + _MAX_CHAR), False
-        if is_last:
-            return key.gt(low), True
-        # Keys for an equal value extend past `low`, so use `>=` and filter
-        return key.gte(low), False
+            return Key(key.name).between(low, prefix + _MAX_CHAR)
+        return Key(key.name).gte(low)
 
 
 @dataclasses.dataclass(frozen=True)
 class GreaterThanOrEqual(Comparator):
     """The attribute is greater than or equal to `value`."""
+
+    narrows_key = True
 
     value: Any
 
@@ -124,18 +198,20 @@ class GreaterThanOrEqual(Comparator):
         """Get `attr >= value`."""
         return attr.gte(self.value)
 
-    def key_condition(self, key, prefix, fmt, is_last):
-        """Get an exact lower bound on the key."""
-        low = prefix + fmt(self.value)
+    def create_key_condition_expression(self, key, values):
+        """Get the keys from the first key for `value`, capped by the text before it."""
+        prefix, _ = self._placement(key, values)
+        low = self._format(key, values, self.value)
         if prefix:
-            # Stay within the prefix so other item types aren't matched
-            return key.between(low, prefix + _MAX_CHAR), True
-        return key.gte(low), True
+            return Key(key.name).between(low, prefix + _MAX_CHAR)
+        return Key(key.name).gte(low)
 
 
 @dataclasses.dataclass(frozen=True)
 class LessThan(Comparator):
     """The attribute is less than `value`."""
+
+    narrows_key = True
 
     value: Any
 
@@ -143,18 +219,20 @@ class LessThan(Comparator):
         """Get `attr < value`."""
         return attr.lt(self.value)
 
-    def key_condition(self, key, prefix, fmt, is_last):
-        """Get an upper bound on the key, exact only with no prefix."""
-        high = prefix + fmt(self.value)
+    def create_key_condition_expression(self, key, values):
+        """Get the keys before every key for `value`, from the text before it."""
+        prefix, _ = self._placement(key, values)
+        value = self._format(key, values, self.value)
         if prefix:
-            # Stay within the prefix; the filter removes values equal to `high`
-            return key.between(prefix, high), False
-        return key.lt(high), True
+            return Key(key.name).between(prefix, _before(value))
+        return Key(key.name).lt(value)
 
 
 @dataclasses.dataclass(frozen=True)
 class LessThanOrEqual(Comparator):
     """The attribute is less than or equal to `value`."""
+
+    narrows_key = True
 
     value: Any
 
@@ -162,16 +240,17 @@ class LessThanOrEqual(Comparator):
         """Get `attr <= value`."""
         return attr.lte(self.value)
 
-    def key_condition(self, key, prefix, fmt, is_last):
-        """Get an upper bound on the key, exact only if the attribute ends the key."""
-        high = prefix + fmt(self.value)
+    def create_key_condition_expression(self, key, values):
+        """Get the keys up to every key for `value`, from the text before it."""
+        prefix, is_last = self._placement(key, values)
+        high = self._format(key, values, self.value)
+
+        # Include the keys that continue past the value
         if not is_last:
-            # Include the rest of the key that follows the upper bound
             high += _MAX_CHAR
         if prefix:
-            # Stay within the prefix so other item types aren't matched
-            return key.between(prefix, high), is_last
-        return key.lte(high), is_last
+            return Key(key.name).between(prefix, high)
+        return Key(key.name).lte(high)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -223,178 +302,3 @@ class NotExists(Comparator):
     def filter(self, attr: Attr) -> ConditionBase:
         """Get `attribute_not_exists(attr)`."""
         return attr.not_exists()
-
-
-def between(low: Any, high: Any) -> Between:
-    """Match an attribute between `low` and `high`, inclusive."""
-    return Between(low, high)
-
-
-def begins_with(prefix: str) -> BeginsWith:
-    """Match an attribute starting with `prefix`."""
-    return BeginsWith(prefix)
-
-
-def gt(value: Any) -> GreaterThan:
-    """Match an attribute greater than `value`."""
-    return GreaterThan(value)
-
-
-def gte(value: Any) -> GreaterThanOrEqual:
-    """Match an attribute greater than or equal to `value`."""
-    return GreaterThanOrEqual(value)
-
-
-def lt(value: Any) -> LessThan:
-    """Match an attribute less than `value`."""
-    return LessThan(value)
-
-
-def lte(value: Any) -> LessThanOrEqual:
-    """Match an attribute less than or equal to `value`."""
-    return LessThanOrEqual(value)
-
-
-def ne(value: Any) -> NotEqual:
-    """Match an attribute not equal to `value` (filter-only)."""
-    return NotEqual(value)
-
-
-def is_in(*values: Any) -> In:
-    """Match an attribute equal to one of `values` (filter-only)."""
-    return In(values)
-
-
-def contains(value: Any) -> Contains:
-    """Match an attribute (string, set or list) containing `value` (filter-only)."""
-    return Contains(value)
-
-
-def exists() -> Exists:
-    """Match items that have the attribute (filter-only)."""
-    return Exists()
-
-
-def not_exists() -> NotExists:
-    """Match items without the attribute (filter-only)."""
-    return NotExists()
-
-
-def _format_value(value: Any, conversion: str | None, format_spec: str | None) -> str:
-    """Format a value as a template field would, so bounds sort like the keys."""
-    # `Formatter.parse` types the spec as optional, though fields always have one
-    return _formatter.format_field(
-        _formatter.convert_field(value, conversion), format_spec or ""
-    )
-
-
-def _prefix_filter(name: str, template: str) -> ConditionBase | None:
-    """Filter a key on its template's leading literal text, or None if there is none.
-
-    Args:
-        name: The key attribute name, e.g. `"PK"`
-        template: The key template, e.g. `"CUSTOMER#{customer_id}"`
-    """
-    # The first parsed part's literal is the text before any field
-    literal = next(iter(_formatter.parse(template)), ("",))[0]
-    return Attr(name).begins_with(literal) if literal else None
-
-
-def _partition_key_condition(
-    name: str, template: str, values: Mapping[str, Any]
-) -> tuple[ConditionBase, set[str]]:
-    """Build the equality condition on a partition key.
-
-    Args:
-        name: The partition key attribute name, e.g. `"PK"`
-        template: The partition key template
-        values: The query's values and comparators
-
-    Returns:
-        The key condition and the attributes it accounts for
-
-    Raises:
-        ValueError: If a template attribute is missing or given a comparator
-    """
-    fields = _template_fields(template)
-
-    # Every partition key attribute is needed to build the key
-    missing = sorted(fields - values.keys())
-    if missing:
-        raise ValueError(
-            f"Values for {', '.join(missing)} are required to query on {name} "
-            f"({template!r})"
-        )
-
-    # The partition key can only be matched by equality
-    comparators = sorted(f for f in fields if isinstance(values[f], Comparator))
-    if comparators:
-        raise ValueError(
-            f"{', '.join(comparators)} are part of the partition key {name} "
-            f"({template!r}) and must be given as plain values, not comparators"
-        )
-
-    return Key(name).eq(_formatter.vformat(template, (), values)), fields
-
-
-def _sort_key_condition(
-    name: str, template: str, values: Mapping[str, Any]
-) -> tuple[ConditionBase | None, set[str]]:
-    """Build the most selective single condition DynamoDB allows on a sort key.
-
-    Plain values fix the key text in template order. The first attribute that is
-    missing or has a comparator ends the condition: a comparator becomes a range, and a
-    missing attribute a `begins_with` on the text so far. Later attributes are filtered.
-
-    Args:
-        name: The sort key attribute name, e.g. `"SK"`
-        template: The sort key template
-        values: The query's values and comparators
-
-    Returns:
-        The condition (None if nothing is fixed) and the attributes it fully accounts for
-    """
-    key = Key(name)
-    parts = list(_formatter.parse(template))
-    prefix = ""
-    consumed: set[str] = set()
-
-    def prefix_condition() -> tuple[ConditionBase | None, set[str]]:
-        """Match on the key text fixed so far, if any."""
-        return (key.begins_with(prefix) if prefix else None), consumed
-
-    for position, (literal, field_name, format_spec, conversion) in enumerate(parts):
-        # Literal text is always part of the key
-        prefix += literal
-        if field_name is None:
-            continue
-
-        # The key can't be fixed past a missing attribute
-        if field_name not in values:
-            return prefix_condition()
-
-        # A plain value fixes this part of the key, so move to the next part
-        value = values[field_name]
-        if not isinstance(value, Comparator):
-            prefix += _format_value(value, conversion, format_spec)
-            consumed.add(field_name)
-            continue
-
-        # The first comparator is the key's only range, so it ends the condition
-        condition, exact = value.key_condition(
-            key,
-            prefix,
-            functools.partial(
-                _format_value, conversion=conversion, format_spec=format_spec
-            ),
-            is_last=position == len(parts) - 1,
-        )
-        if condition is None:
-            # Filter-only comparator, so match on the text fixed so far
-            return prefix_condition()
-        if exact:
-            consumed.add(field_name)
-        return condition, consumed
-
-    # Every attribute was given a plain value
-    return key.eq(prefix), consumed

@@ -27,7 +27,7 @@ router = Router()
 @router.query()
 def get_user(user_id: str) -> User:
     """Get a user by ID."""
-    return User.get(user_id=user_id)
+    return User.get({"user_id": user_id})
 
 
 @router.mutation(deprecation_reason="Use renameUser")
@@ -122,7 +122,7 @@ def me(event: AppSyncEvent) -> User:
     identity = event["identity"]
     if identity is None or "sub" not in identity:
         raise PermissionError("Sign in to see your profile")
-    return User.get(user_id=identity["sub"])
+    return User.get({"user_id": identity["sub"]})
 ```
 
 ## Combining routers
