@@ -279,13 +279,17 @@ class DynamoModel(pydantic.BaseModel):
         return None
 
     @classmethod
-    def get(cls, key: Mapping[str, Any], *, table: Table | None = None) -> Self:
+    def get(
+        cls, key: Mapping[str, Any] | None = None, *, table: Table | None = None
+    ) -> Self:
         """Get an item by its primary key, attached to `table` and check pointed. E.g.
 
             Post.get({"user_id": "u1", "post_id": "p1"})
+            Settings.get()  # A primary key built from no attributes
 
         Args:
-            key: Values for the attributes the primary key is built from, by name
+            key: Values for the attributes the primary key is built from, by name, or
+                None when the key templates reference no attributes
             table: The table to read from, or None for the default table
 
         Raises:
@@ -294,7 +298,9 @@ class DynamoModel(pydantic.BaseModel):
             KeyError: If no item has the key, or a column key attribute has no value
         """
         table = table or cls.default_table()
-        item_key = cls._meta.primary_index.format(key)
+
+        # No key means no attribute values, so a key needing any still raises
+        item_key = cls._meta.primary_index.format(key or {})
 
         try:
             response = table.get_item(Key=item_key)
@@ -403,8 +409,8 @@ class DynamoModel(pydantic.BaseModel):
     @classmethod
     def update(
         cls,
-        key: Mapping[str, Any],
-        changes: Mapping[str, Any],
+        key: Mapping[str, Any] | None = None,
+        changes: Mapping[str, Any] | None = None,
         *,
         table: Table | None = None,
     ) -> Self:
@@ -419,10 +425,13 @@ class DynamoModel(pydantic.BaseModel):
 
             Post.update({"user_id": "u1", "post_id": "p1"}, {"likes": Increment(1)})
             User.update({"user_id": "u1"}, {"identity": {"username": "new"}})
+            Settings.update(changes={"theme": "dark"})  # A key built from no attributes
 
         Args:
-            key: Values for the attributes the primary key is built from, by name
-            changes: The new values of the other attributes, by name
+            key: Values for the attributes the primary key is built from, by name, or
+                None when the key templates reference no attributes
+            changes: The new values of the other attributes, by name; required, but
+                defaults to None so `key` can be left out
             table: The table to update, or None for the default table
 
         Returns:
@@ -438,6 +447,9 @@ class DynamoModel(pydantic.BaseModel):
         """
         table = table or cls.default_table()
         primary = cls._meta.primary_index
+
+        # No key means no attribute values, so a key needing any still raises
+        key = key or {}
         item_key = primary.format(key)
 
         if not changes:
@@ -487,13 +499,17 @@ class DynamoModel(pydantic.BaseModel):
         return new_obj
 
     @classmethod
-    def remove(cls, key: Mapping[str, Any], *, table: Table | None = None) -> None:
+    def remove(
+        cls, key: Mapping[str, Any] | None = None, *, table: Table | None = None
+    ) -> None:
         """Delete an item by its primary key, without needing its model. E.g.
 
             Post.remove({"user_id": "u1", "post_id": "p1"})
+            Settings.remove()  # A primary key built from no attributes
 
         Args:
-            key: Values for the attributes the primary key is built from, by name
+            key: Values for the attributes the primary key is built from, by name, or
+                None when the key templates reference no attributes
             table: The table to delete from, or None for the default table
 
         Raises:
@@ -502,7 +518,9 @@ class DynamoModel(pydantic.BaseModel):
             KeyError: If a column key attribute has no value
         """
         table = table or cls.default_table()
-        item_key = cls._meta.primary_index.format(key)
+
+        # No key means no attribute values, so a key needing any still raises
+        item_key = cls._meta.primary_index.format(key or {})
 
         try:
             table.delete_item(Key=item_key)

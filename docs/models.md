@@ -89,6 +89,9 @@ exactly the attributes the primary key is built from: a missing one raises `Valu
 (`KeyError` for a column key), and so does one the key doesn't use. The model is
 attached to the table and checkpointed.
 
+For a model with a single item, whose key templates reference no attributes (e.g.
+`base=("SETTINGS", "SETTINGS")`), the key can be left out: `Settings.get()`.
+
 ### `put`
 
 `order.put(table)` writes the model, the inverse of `get`. The stored item is the
@@ -142,7 +145,7 @@ Account.update({"account_id": "a1"}, {"identity": {"username": "new"}})
 Account.update({"account_id": "a1"}, {"likes": Increment(1)})
 ```
 
-- **`changes` can't be empty**, otherwise `update` raises `ValueError`.
+- **`changes` can't be empty**, otherwise `update` raises `ValueError`. For a model whose key templates reference no attributes, leave the key out and pass the changes by name: `Settings.update(changes={"theme": "dark"})`.
 - **The primary key can't be changed.** A change to an attribute the primary key is
   built from raises `ValueError`; delete the item and put it under its new key instead.
 - **Values are validated before anything is sent.** Each one is checked with its field's
@@ -164,7 +167,8 @@ It returns the updated item, attached and checkpointed. See
 ### `remove`
 
 `Order.remove({"customer_id": "c1", "date": "2024-01-01", "order_id": "o1"})` deletes an
-item without needing its model. It takes the same `key` mapping as `get`.
+item without needing its model. It takes the same `key` mapping as `get`, which can
+likewise be left out for a single-item model: `Settings.remove()`.
 
 ### `query`
 

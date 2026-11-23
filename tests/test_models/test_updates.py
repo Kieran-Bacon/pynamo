@@ -156,6 +156,30 @@ def test_primary_key_attributes_cannot_be_changed(table):
 def test_an_update_needs_changes(table):
     with pytest.raises(ValueError, match="at least one change"):
         Account.update(ACCOUNT_KEY, {}, table=table)
+    with pytest.raises(ValueError, match="at least one change"):
+        Account.update(ACCOUNT_KEY, table=table)
+    table.update_item.assert_not_called()
+
+
+def test_an_update_needs_no_key_when_the_key_uses_no_attributes(table):
+    class Settings(DynamoModel):
+        theme: str
+
+        class Meta:
+            indexes = single_table_indexes(base=("SETTINGS", "SETTINGS"))
+
+    table.update_item.return_value = {"Attributes": {"theme": "dark"}}
+
+    assert Settings.update(changes={"theme": "dark"}, table=table).theme == "dark"
+    assert table.update_item.call_args.kwargs["Key"] == {
+        "PK": "SETTINGS",
+        "SK": "SETTINGS",
+    }
+
+
+def test_an_update_without_a_key_still_requires_the_key_attributes(table):
+    with pytest.raises(ValueError, match="Not all required attributes"):
+        Account.update(changes={"likes": 1}, table=table)
     table.update_item.assert_not_called()
 
 

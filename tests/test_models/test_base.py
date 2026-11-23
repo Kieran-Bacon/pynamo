@@ -287,6 +287,32 @@ def test_get_rejects_attributes_the_key_is_not_built_from(order_model, table):
     table.get_item.assert_not_called()
 
 
+class Settings(DynamoModel):
+    """A single-item model, whose primary key is built from no attributes."""
+
+    theme: str
+
+    class Meta:
+        indexes = single_table_indexes(base=("SETTINGS", "SETTINGS"))
+
+
+SETTINGS_KEY = {"PK": "SETTINGS", "SK": "SETTINGS"}
+"""The only primary key `Settings` has."""
+
+
+def test_get_needs_no_key_when_the_key_uses_no_attributes(table):
+    table.get_item.return_value = {"Item": {"theme": "dark"}}
+
+    assert Settings.get(table=table).theme == "dark"
+    table.get_item.assert_called_once_with(Key=SETTINGS_KEY)
+
+
+def test_get_without_a_key_still_requires_the_key_attributes(order_model, table):
+    with pytest.raises(ValueError, match="Not all required attributes"):
+        order_model.get(table=table)
+    table.get_item.assert_not_called()
+
+
 def test_get_reports_a_missing_item(order_model, table):
     table.get_item.return_value = {}
     with pytest.raises(KeyError, match="Could not find entry"):
@@ -348,6 +374,11 @@ def test_key_attributes_can_share_names_with_parameters(table):
     table.get_item.assert_called_once_with(Key=key)
     Setting.remove({"table": "t1"}, table=table)
     table.delete_item.assert_called_once_with(Key=key)
+
+
+def test_remove_needs_no_key_when_the_key_uses_no_attributes(table):
+    Settings.remove(table=table)
+    table.delete_item.assert_called_once_with(Key=SETTINGS_KEY)
 
 
 def test_remove_requires_the_key_attributes(order_model, table):
